@@ -26,7 +26,8 @@ export default function MainWindow() {
                                 <div className="flex flex-wrap gap-1 font-semibold text-xs">
                                     <span className="bg-red-300 p-1 rounded ">🎓 Computer Science @ UW Madison</span>
                                     <span className="bg-green-300 p-1 rounded ">💻 Software Engineer @ Skyward</span>
-                                    <span className="bg-purple-300 p-1 rounded ">🏠 Thousand Oaks, CA</span>
+                                    <span className="bg-blue-300 p-1 rounded ">🏠 Thousand Oaks, CA</span>
+                                    <span className="bg-fuchsia-300 p-1 rounded ">⚡ Open To Work</span>
                                 </div>
                             </div>
                             {/* Summary Statement TR */}
@@ -54,17 +55,17 @@ export default function MainWindow() {
                         {workExperience.map((job) => (
                             <div
                                 key={job.id}
-                                className={`group  hover:scale-[1.03]  rounded-xl  hover:shadow-inner p-4 cursor-pointer duration-200 ${
+                                className={`group  hover:scale-[1.03] p-4 rounded-xl  hover:shadow-inner  cursor-pointer duration-200 ${
                                     open && job.id === open.id
-                                        ? "bg-gradient-to-tr from-violet-400 to-purple-400 text-slate-100"
-                                        : "bg-slate-800 border-violet-400 hover:border-violet-600 border-2"
+                                        ? "bg-gradient-to-tr from-violet-400 to-purple-400 text-slate-100 "
+                                        : "border-violet-400 hover:border-violet-600 border-[3px] bg-slate-800 "
                                 }`}
                                 onClick={() => {
                                     setOpen(job);
                                     document.getElementById("right")?.scrollTo({ top: 0, behavior: "smooth" });
                                 }}
                             >
-                                <h3 className="group-hover:font-extrabold text-xl font-semibold duration-200 group-hover:text-violet-200">
+                                <h3 className="group-hover:font-extrabold text-xl font-semibold duration-100 group-hover:text-violet-200">
                                     {job.position}
                                 </h3>
                                 <p className="">
@@ -90,14 +91,14 @@ export default function MainWindow() {
                         {projects.map((project) => (
                             <div
                                 key={project.id}
-                                className={`group  hover:scale-[1.03]  rounded-xl  hover:shadow-inner p-4 cursor-pointer duration-300 ${
+                                className={`group  hover:scale-[1.03]  rounded-xl  hover:shadow-inner p-4 cursor-pointer duration-200 ${
                                     open && project.id === open.id
                                         ? "bg-gradient-to-tr from-teal-400 to-cyan-400 text-slate-100"
-                                        : "bg-slate-800 border-teal-400 hover:border-teal-600 border-2"
+                                        : "bg-slate-800 border-teal-400 hover:border-teal-600 border-[3px]"
                                 }`}
                                 onClick={() => setOpen(project)}
                             >
-                                <h3 className="group-hover:font-extrabold text-xl font-semibold duration-200 group-hover:text-teal-100">
+                                <h3 className="group-hover:font-extrabold text-xl font-semibold duration-100 group-hover:text-teal-100">
                                     {project.title}
                                 </h3>
                                 <p className="mt-2">{project.shortDesc}</p>
