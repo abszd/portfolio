@@ -16,7 +16,7 @@ export default function MainWindow() {
                             <div className="col-span-2 row-span-2 rounded-3xl shadow-xl shadow-slate-800">
                                 <img
                                     className="h-full w-full object-cover border-2 border-slate-800 rounded-xl"
-                                    src="/me.jpeg"
+                                    src={`${process.env.PUBLIC_URL}/me.jpeg`}
                                     alt="Arian Abbaszadeh"
                                 />
                             </div>
