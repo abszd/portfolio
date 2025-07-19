@@ -11,14 +11,14 @@ export function Header() {
             });
         }
     }, []);
-    
+
     const sections = ["About", "Experience", "Projects", "Contact"];
-    
+
     return (
         <div
             className={`z-10 fixed h-20 ${
-                top 
-                    ? "bg-slate-800/80 backdrop-blur-xl border-b border-slate-600/30" 
+                top
+                    ? "bg-slate-800/80 backdrop-blur-xl border-b border-slate-400/50"
                     : "bg-slate-800/40 backdrop-blur-md border-b border-slate-600/0"
             } w-screen flex p-4 justify-around duration-300 transition-all`}
         >
@@ -26,7 +26,7 @@ export function Header() {
                 {sections.map((section) => {
                     return (
                         <span
-                            className="text-xl font-medium hover:text-slate-200 hover:scale-110 hover:cursor-pointer duration-300 p-2 rounded-lg hover:bg-slate-700/50 transition-all text-gray-300"
+                            className="text-xl font-medium hover:text-slate-100 hover:scale-105 hover:cursor-pointer duration-300 p-2 rounded-lg transition-all text-gray-300"
                             onClick={() => {
                                 const element = document.getElementById(section.toLowerCase());
                                 document

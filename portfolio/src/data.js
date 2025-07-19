@@ -56,7 +56,7 @@ export const projects = [
 - Reduced time spent researching course difficulty
 - Democratized access to grade distribution data
         `,
-        tech: ["React", "Javascript", "Python", "Tailwind", "Firebase", "RESTful API", "JSON"],
+        tech: ["React", "Javascript", "Python", "Tailwind", "Firebase", "JSON"],
         links: [
             { type: "website", url: "https://badgergrades.com" },
             { type: "github", url: "https://github.com/abszd/badger-grades" },
