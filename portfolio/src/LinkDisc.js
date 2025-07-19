@@ -1,12 +1,15 @@
 export default function LinkDisc({ url, type, small = false }) {
     return (
-        <img
-            className={`cursor-pointer aspect-square shadow-md shadow-slate-800 hover:shadow-lg hover:shadow-slate-800 ${
-                small ? `h-16` : "h-28"
-            } hover:skew-x-3 hover:skew-y-3 duration-200 rounded-full`}
-            src={`${process.env.PUBLIC_URL}/${type}.png`}
-            alt={`${type}`}
-            onClick={() => window.open(url, "_blank")}
-        ></img>
+        <div className="relative group">
+            <div className="absolute inset-0 bg-slate-600 rounded-full blur-lg opacity-0 group-hover:opacity-30 transition-opacity duration-300"></div>
+            <img
+                className={`relative cursor-pointer aspect-square shadow-xl hover:shadow-2xl ${
+                    small ? `h-16` : "h-28"
+                } hover:scale-110 duration-300 rounded-full border-2 border-slate-600/30 hover:border-slate-500/50 transition-all bg-slate-700/20 backdrop-blur-sm`}
+                src={`${process.env.PUBLIC_URL}/${type}.png`}
+                alt={`${type}`}
+                onClick={() => window.open(url, "_blank")}
+            />
+        </div>
     );
 }
