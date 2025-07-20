@@ -30,7 +30,7 @@ export default function MainWindow() {
             >
                 <div
                     id="left"
-                    className="p-4 sm:p-8 pt-24 overflow-y-auto h-screen space-y-8 sm:space-y-12 scrollbar-hidden"
+                    className="p-4 sm:p-8 pt-28 sm:pt-32 overflow-y-auto h-screen space-y-8 sm:space-y-12 scrollbar-hidden"
                 >
                     <section id="about" className="space-y-8 scroll-mt-16 animate-fade-in">
                         <h2 className="text-2xl sm:text-4xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
