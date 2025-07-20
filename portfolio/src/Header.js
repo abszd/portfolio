@@ -6,9 +6,7 @@ export function Header() {
     useEffect(() => {
         const left = document.getElementById("left");
         if (left) {
-            left.addEventListener("scroll", () => {
-                setTimeout(() => setTop(left.scrollTop <= 5), 200);
-            });
+            left.addEventListener("scroll", () => setTop(left.scrollTop <= 5));
         }
     }, []);
 
@@ -18,9 +16,9 @@ export function Header() {
         <div
             className={`z-30 fixed h-20 ${
                 top
-                    ? "bg-slate-800/80 backdrop-blur-xl border-b border-slate-400/50"
+                    ? "bg-slate-800/90 backdrop-blur-xl border-b border-slate-400/50"
                     : "bg-slate-800/40 backdrop-blur-md border-b border-slate-600/0"
-            } w-screen flex p-2 sm:p-4 justify-center sm:justify-around duration-300 transition-all`}
+            } w-screen flex p-2 sm:p-4 justify-center sm:justify-around transition-all duration-500`}
         >
             <div className="flex justify-between w-full sm:w-1/2 items-center px-2 sm:px-0">
                 {sections.map((section) => {

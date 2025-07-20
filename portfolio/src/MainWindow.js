@@ -24,7 +24,7 @@ export default function MainWindow() {
             <div
                 className={`${
                     isMobile ? "w-full" : "w-1/2"
-                } min-w-96 bg-slate-800/50 backdrop-blur-xl duration-500 border-r border-slate-600/30 transition-opacity duration-300 ${
+                } min-w-96 bg-slate-800/50 backdrop-blur-xl duration-500 border-r border-slate-600/30 transition-opacity ${
                     isMobile && open ? "opacity-0 pointer-events-none" : "opacity-100 pointer-events-auto"
                 }`}
             >
