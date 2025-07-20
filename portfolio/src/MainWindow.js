@@ -1,23 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import LinkDisc from "./LinkDisc";
 import SelectWindow from "./SelectWindow";
 import { workExperience, projects } from "./data";
 
-export default function MainWindow() {
+export default function MainWindow({ isMobile }) {
     const [open, setOpen] = useState(null);
-    const [isMobile, setIsMobile] = useState(false);
-
-    useEffect(() => {
-        const checkMobile = () => {
-            const aspectRatio = window.innerWidth / window.innerHeight;
-            const isMobileView = window.innerWidth < 768 || aspectRatio < 0.8;
-            setIsMobile(isMobileView);
-        };
-
-        checkMobile();
-        window.addEventListener("resize", checkMobile);
-        return () => window.removeEventListener("resize", checkMobile);
-    }, []);
 
     return (
         <div className="flex justify-center duration-300 h-screen overflow-hidden bg-slate-900 relative">
@@ -197,7 +184,7 @@ export default function MainWindow() {
             {/* Mobile Detail View - Overlay */}
             {isMobile && open && (
                 <div className="absolute inset-0 z-20 bg-slate-900">
-                    <SelectWindow key={open?.id || "closed"} info={open} setOpen={() => setOpen(null)} />
+                    <SelectWindow key={open?.id || "closed"} info={open} setOpen={setOpen} />
                 </div>
             )}
         </div>
