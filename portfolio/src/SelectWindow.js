@@ -1,23 +1,31 @@
+import { useCallback } from "react";
 import LinkDisc from "./LinkDisc";
 import Markdown from "react-markdown";
 
 export default function SelectWindow({ info, setOpen }) {
+    const handleBack = useCallback(() => {
+        setOpen(null);
+    }, [setOpen]);
+
     if (!info) {
         return <></>;
     } else {
         return (
-            <div id="right" className="bg-transparent p-8 h-screen overflow-y-auto overflow-x-hidden scrollbar-hidden">
+            <div
+                id="right"
+                className="bg-transparent p-4 sm:p-8 h-screen overflow-y-auto overflow-x-hidden scrollbar-hidden animate-slide-in-left"
+            >
                 <div className="h-20"></div>
-                <div className="bg-slate-700/50 backdrop-blur-xl rounded-3xl p-8 border border-slate-600/30 shadow-2xl">
-                    <div className="flex mb-6 gap-4 justify-between items-start">
+                <div className="bg-slate-700/50 backdrop-blur-xl rounded-3xl p-4 sm:p-8 border border-slate-600/30 shadow-2xl">
+                    <div className="flex mb-6 gap-4 justify-between items-start flex-col sm:flex-row">
                         <div className="flex items-center gap-4">
                             <div
                                 className="flex aspect-square text-2xl bg-slate-600 text-white p-3 hover:cursor-pointer hover:scale-110 duration-300 rounded-2xl items-center justify-center shadow-lg hover:shadow-xl"
-                                onClick={() => setOpen(null)}
+                                onClick={handleBack}
                             >
                                 ←
                             </div>
-                            <div className="text-3xl font-bold text-white">
+                            <div className="text-2xl sm:text-3xl font-bold text-white">
                                 {info.title ? info.title : `${info.position} @ ${info.company}`}
                             </div>
                         </div>
@@ -33,7 +41,7 @@ export default function SelectWindow({ info, setOpen }) {
                         <Markdown
                             components={{
                                 h2: ({ children }) => (
-                                    <h2 className="text-2xl font-bold mb-6 mt-8 text-slate-200">
+                                    <h2 className="text-xl sm:text-2xl font-bold mb-6 mt-8 text-slate-200">
                                         {children}
                                     </h2>
                                 ),
@@ -41,16 +49,12 @@ export default function SelectWindow({ info, setOpen }) {
                                     <strong className="font-bold text-slate-200">{children}</strong>
                                 ),
                                 ul: ({ children }) => (
-                                    <ul className="list-disc list-inside mb-6 space-y-2 text-gray-300">
-                                        {children}
-                                    </ul>
+                                    <ul className="list-disc list-inside mb-6 space-y-2 text-gray-300">{children}</ul>
                                 ),
                                 li: ({ children }) => (
                                     <li className="mb-2 text-gray-300 leading-relaxed">{children}</li>
                                 ),
-                                p: ({ children }) => (
-                                    <p className="text-gray-300 leading-relaxed mb-4">{children}</p>
-                                ),
+                                p: ({ children }) => <p className="text-gray-300 leading-relaxed mb-4">{children}</p>,
                             }}
                         >
                             {info.markdown}

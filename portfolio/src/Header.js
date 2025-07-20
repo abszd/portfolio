@@ -16,17 +16,17 @@ export function Header() {
 
     return (
         <div
-            className={`z-10 fixed h-20 ${
+            className={`z-30 fixed h-20 ${
                 top
                     ? "bg-slate-800/80 backdrop-blur-xl border-b border-slate-400/50"
                     : "bg-slate-800/40 backdrop-blur-md border-b border-slate-600/0"
-            } w-screen flex p-4 justify-around duration-300 transition-all`}
+            } w-screen flex p-2 sm:p-4 justify-center sm:justify-around duration-300 transition-all`}
         >
-            <div className="flex justify-between w-1/2 items-center">
+            <div className="flex justify-between w-full sm:w-1/2 items-center px-2 sm:px-0">
                 {sections.map((section) => {
                     return (
                         <span
-                            className="text-xl font-medium hover:text-slate-100 hover:scale-105 hover:cursor-pointer duration-300 p-2 rounded-lg transition-all text-gray-300"
+                            className="text-sm sm:text-xl font-medium hover:text-slate-100 hover:scale-105 hover:cursor-pointer duration-300 p-1 sm:p-2 rounded-lg transition-all text-gray-300 text-center"
                             onClick={() => {
                                 const element = document.getElementById(section.toLowerCase());
                                 document
