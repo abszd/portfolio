@@ -8,13 +8,13 @@ function App() {
     useEffect(() => {
         const checkMobile = () => {
             const aspectRatio = window.innerWidth / window.innerHeight;
-            const isMobileView = window.innerWidth < 768 || aspectRatio < 0.8;
+            const isMobileView = window.innerWidth < 768 || aspectRatio < 1.1;
             setIsMobile(isMobileView);
         };
 
         checkMobile();
-        window.addEventListener('resize', checkMobile);
-        return () => window.removeEventListener('resize', checkMobile);
+        window.addEventListener("resize", checkMobile);
+        return () => window.removeEventListener("resize", checkMobile);
     }, []);
 
     return (
