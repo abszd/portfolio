@@ -660,7 +660,7 @@ button:focus-visible .sweep,
     transition-delay: var(--d, 0ms);
 }
 
-[data-reveal].is-in {
+[data-reveal][data-in] {
     opacity: 1;
     translate: 0 0;
 }

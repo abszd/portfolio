@@ -15,13 +15,15 @@ import { useTheme } from "./hooks/useTheme.js";
 const ProjectPage = lazy(() => import("./components/ProjectPage.jsx"));
 
 // Reveals every [data-reveal] element the first time it scrolls into view.
+// The flag is a data attribute rather than a class: React rewrites className
+// on re-render (e.g. when a work row opens), which would wipe a class added here.
 function useRevealOnScroll() {
     useEffect(() => {
         const io = new IntersectionObserver(
             (entries) => {
                 for (const e of entries) {
                     if (e.isIntersecting) {
-                        e.target.classList.add("is-in");
+                        e.target.dataset.in = "";
                         io.unobserve(e.target);
                     }
                 }
@@ -68,7 +70,7 @@ export default function App() {
     const { active, scrolled } = useScrollState();
     useRevealOnScroll();
 
-    const dim = projectId ? 0.35 : scrolled ? 0.5 : 0.9;
+    const dim = projectId ? 0.25 : scrolled ? 0.35 : 0.7;
 
     return (
         <>
