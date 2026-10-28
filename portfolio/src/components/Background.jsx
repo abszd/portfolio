@@ -9,6 +9,9 @@ import { stats } from "../stats.js";
 //   2. the full-screen pass samples that texture to size each dot and,
 //      with bilinear filtering, to draw iso-lines of the very same field.
 
+// How fast the field drifts, relative to real time. Kept slow so it reads as ambient.
+const FLOW_SPEED = 0.3;
+
 const NOISE = /* glsl */ `
 vec3 permute(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
 float snoise(vec2 v) {
@@ -101,14 +104,14 @@ void main() {
     float d = length(centerScreen - uMouse);
     float R = 150.0 * uDpr;
     float lens = uMouseOn * exp(-(d * d) / (2.0 * R * R));
-    v = clamp(v + lens * 0.55, 0.0, 1.0);
+    v = clamp(v + lens * 0.35, 0.0, 1.0);
 
     // Click ripple: an expanding ring that briefly inflates the dots it passes.
     float rd = length(centerScreen - uRipple.xy);
     float ring = exp(-pow((rd - uRipple.z * 900.0 * uDpr) / (40.0 * uDpr), 2.0)) * exp(-uRipple.z * 1.6);
-    v = clamp(v + ring * 0.7, 0.0, 1.0);
+    v = clamp(v + ring * 0.45, 0.0, 1.0);
 
-    float radius = uCell * 0.5 * (0.1 + 0.72 * v);
+    float radius = uCell * 0.5 * (0.1 + 0.62 * v);
     float aa = 0.9;
     float dotMask = 1.0 - smoothstep(radius - aa, radius + aa, length(local));
 
@@ -129,9 +132,9 @@ void main() {
     float reg = (step(abs(g.x), 0.5 * uDpr) + step(abs(g.y), 0.5 * uDpr)) * step(max(abs(g.x), abs(g.y)), 5.0 * uDpr);
 
     vec3 c = uBg;
-    c = mix(c, col, line * 0.12 * uIntensity);
-    c = mix(c, uFg, clamp(reg, 0.0, 1.0) * 0.18 * uIntensity);
-    c = mix(c, dotCol, dotMask * (0.1 + 0.75 * v) * uIntensity);
+    c = mix(c, col, line * 0.08 * uIntensity);
+    c = mix(c, uFg, clamp(reg, 0.0, 1.0) * 0.12 * uIntensity);
+    c = mix(c, dotCol, dotMask * (0.08 + 0.62 * v) * uIntensity);
     o = vec4(c, 1.0);
 }`;
 
@@ -302,7 +305,7 @@ export default function Background({ reducedMotion, dim }) {
         function frame(now) {
             const dt = Math.min((now - state.last) / 1000, 0.05);
             state.last = now;
-            state.time += dt;
+            state.time += dt * FLOW_SPEED;
             const k = 1 - Math.exp(-dt * 7);
             state.mouse[0] += (state.target[0] - state.mouse[0]) * k;
             state.mouse[1] += (state.target[1] - state.mouse[1]) * k;
