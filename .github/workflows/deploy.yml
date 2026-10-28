@@ -1,0 +1,40 @@
+name: Deploy to GitHub Pages
+
+# Builds the Vite app in portfolio/ and publishes it to the gh-pages branch,
+# which GitHub Pages serves at https://abszd.github.io/portfolio/.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portfolio
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: portfolio/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: portfolio/dist
+          publish_branch: gh-pages
+          commit_message: "Deploy ${{ github.sha }}"

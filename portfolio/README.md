@@ -14,7 +14,9 @@ Personal site for Arian Abbaszadeh. Built with React 19 and Vite, with no UI fra
 npm install
 npm run dev      # local dev server
 npm run build    # production build to dist/
-npm run deploy   # build and publish dist/ to the gh-pages branch
+npm run deploy   # manual deploy: build and publish dist/ to the gh-pages branch
 ```
+
+Every push to `main` deploys automatically via `.github/workflows/deploy.yml`, which builds the site and publishes it to the `gh-pages` branch. It can also be run by hand from the Actions tab.
 
 The site is served from `/portfolio/` (see `base` in `vite.config.js`). Project pages use hash routes (`#/project/<id>`), so deep links work on GitHub Pages.
