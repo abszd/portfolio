@@ -10,7 +10,7 @@ import { stats } from "../stats.js";
 //      with bilinear filtering, to draw iso-lines of the very same field.
 
 // How fast the field drifts, relative to real time. Kept slow so it reads as ambient.
-const FLOW_SPEED = 0.3;
+const FLOW_SPEED = 0.15;
 
 const NOISE = /* glsl */ `
 vec3 permute(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
