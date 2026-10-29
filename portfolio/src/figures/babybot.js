@@ -34,13 +34,13 @@ const KICKOFFS = [
 // Octane hitbox half-extents and offset from the car's origin, in car space.
 const HB = [59, 42.1, 18.1];
 const HOFF = [13.88, 0, 20.75];
-// Groups of the 193 inputs, in BetterObs order.
 // The arena's corners are cut at 45°: |x| + |y| stays under this.
 const CORNER = 8064;
 const FIELD_OUTLINE = [
     [2944, 5120], [4096, 3968], [4096, -3968], [2944, -5120],
     [-2944, -5120], [-4096, -3968], [-4096, 3968], [-2944, 5120],
 ];
+// Groups of the 193 inputs, in BetterObs order.
 const OBS_GROUPS = [
     ["ball", 9],
     ["last action", 8],
@@ -163,8 +163,8 @@ export function forward(net, x) {
 //
 // The constants and rules are RocketSim's: throttle, braking and steering curves, tyre grip
 // that lets go under powerslide, jumps, double jumps, dodges with flip cancels and z-damping,
-// air control and its damping, bumps and demos. The arena is flat planes without the curved
-// ramps, and cars drive on every floor, wall and corner face of it.
+// air control and its damping, bumps and demos. The arena's edges are rounded into ramps, and
+// cars drive all over it: floor, walls, corners and, briefly, the ceiling.
 
 const GRAVITY = 650;
 const MAX_SPEED = 2300;
@@ -199,6 +199,13 @@ function rotate(v, k, t) {
     const d = dot(k, v) * (1 - c);
     return [v[0] * c + kv[0] * s + k[0] * d, v[1] * c + kv[1] * s + k[1] * d, v[2] * c + kv[2] * s + k[2] * d];
 }
+
+// Rotate v by the turn that takes direction a onto direction b.
+function turn(v, a, b) {
+    const axis = cross(a, b);
+    const s = len(axis);
+    return s > 1e-9 ? rotate(v, scale(1 / s, axis), Math.atan2(s, dot(a, b))) : v;
+}
 const interp = (x, xs, ys) => {
     if (x <= xs[0]) return ys[0];
     for (let i = 1; i < xs.length; i++) if (x <= xs[i]) return ys[i - 1] + ((ys[i] - ys[i - 1]) * (x - xs[i - 1])) / (xs[i] - xs[i - 1]);
@@ -211,35 +218,42 @@ const bumpGround = (v) => interp(v, [0, 1400, 2200], [0, 1100, 1530]);
 const bumpAir = (v) => interp(v, [0, 1400, 2200], [0, 1390, 1945]);
 const bumpUp = (v) => interp(v, [0, 1400, 2200], [0, 278, 417]);
 
-// The arena as planes, each with an inward normal n (inside means n·p ≥ d). Cars drive on all
-// of them; the ceiling drops them. The back walls are open over the goal mouths, and inside
-// a goal its back, sides and crossbar are solid.
-const H = Math.SQRT1_2;
-const FLOOR = { n: [0, 0, 1], d: 0 };
-const PLANES = [
-    FLOOR,
-    { n: [0, 0, -1], d: -2044, ceiling: true },
-    { n: [-1, 0, 0], d: -4096 },
-    { n: [1, 0, 0], d: -4096 },
-    { n: [0, -1, 0], d: -5120, back: true },
-    { n: [0, 1, 0], d: -5120, back: true },
-    { n: [-H, -H, 0], d: -CORNER * H },
-    { n: [H, -H, 0], d: -CORNER * H },
-    { n: [-H, H, 0], d: -CORNER * H },
-    { n: [H, H, 0], d: -CORNER * H },
-];
+// The arena's inside: an octagonal prism (floor, ceiling, side and back walls, cut corners) with
+// every edge rounded off by RAMP, the curve that carries a rolling ball or a driving car from
+// the floor up a wall. Shrinking the prism by RAMP leaves a core, and the inside is everything
+// within RAMP of that core. The back walls are open over the goal mouths, and inside a goal its
+// back, sides and crossbar are flat and solid.
+const RAMP = 256;
+const CORE = [4096 - RAMP, 5120 - RAMP, CORNER - RAMP * Math.SQRT2]; // |x|, |y| and |x| + |y| limits
 const GOAL_PLANES = [1, -1].map((s) => [
-    { n: [0, -s, 0], d: -6000, solid: true },
-    { n: [-1, 0, 0], d: -893, solid: true },
-    { n: [1, 0, 0], d: -893, solid: true },
-    { n: [0, 0, -1], d: -643, solid: true },
+    { n: [0, -s, 0], d: -6000 },
+    { n: [-1, 0, 0], d: -893 },
+    { n: [1, 0, 0], d: -893 },
+    { n: [0, 0, -1], d: -643 },
 ]);
 const inGoalMouth = (p) => Math.abs(p[0]) < 893 && p[2] < 643;
 
-function planesAt(p) {
-    const out = PLANES.filter((P) => !(P.back && inGoalMouth(p)));
-    if (Math.abs(p[1]) > 5120 && inGoalMouth(p)) out.push(...GOAL_PLANES[p[1] > 0 ? 0 : 1]);
-    return out;
+// The point of the core nearest p. `open` drops the back walls, for a goal mouth.
+function nearestCore(p, open) {
+    const [L, W, C] = CORE;
+    let x = clamp(p[0], -L, L);
+    let y = open ? p[1] : clamp(p[1], -W, W);
+    if (Math.abs(x) + Math.abs(y) > C) {
+        // Onto the cut corner's edge, which runs from (L, C − L) to (C − W, W) in this quadrant.
+        const dx = C - W - L;
+        const dy = W - C + L;
+        const t = clamp(((Math.abs(p[0]) - L) * dx + (Math.abs(p[1]) - C + L) * dy) / (dx * dx + dy * dy), 0, 1);
+        x = Math.sign(p[0]) * (L + t * dx);
+        y = Math.sign(p[1]) * (C - L + t * dy);
+    }
+    return [x, y, clamp(p[2], RAMP, 2044 - RAMP)];
+}
+
+// Height of p above the arena's surface, and the surface's inward normal under it.
+function surfaceAt(p, open) {
+    const d = sub(nearestCore(p, open), p);
+    const dist = len(d);
+    return dist > 1e-6 ? { h: RAMP - dist, n: scale(1 / dist, d) } : { h: RAMP, n: [0, 0, 1] };
 }
 
 const hitboxCenter = (c) => [0, 1, 2].map((k) => c.pos[k] + c.f[k] * HOFF[0] + c.u[k] * HOFF[2]);
@@ -265,7 +279,7 @@ function placeCar(c, x, y, yaw) {
         w: [0, 0, 0], // world angular velocity
         boost: 33.3,
         ground: true,
-        surface: FLOOR,
+        throttling: false,
         jumped: false,
         jumping: false,
         jumpT: 0,
@@ -341,6 +355,7 @@ function drive(c, a) {
     let fs = dot(v, c.f);
     let ls = dot(v, c.r);
     const t = c.boosting ? 1 : th;
+    c.throttling = t !== 0;
     const slip = Math.abs(ls) > 5 ? Math.abs(ls) / (Math.abs(ls) + Math.abs(fs)) : 0;
     let lat = 1 - 0.8 * slip;
     let lon = 1;
@@ -458,87 +473,91 @@ function dodge(c, dx, dy) {
     c.vel = axpy(vy, rh, axpy(vx, fh, c.vel));
 }
 
-// Wheels onto a surface: drop the speed into it and square the car up to it.
-function land(c, P) {
-    const n = P.n;
+// Wheels onto the surface: drop the speed into it and square the car up to it.
+function land(c, n) {
     const vn = dot(c.vel, n);
     if (vn < 0) c.vel = axpy(-vn, n, c.vel);
     Object.assign(c, { jumped: false, jumping: false, sinceJump: 0, doubleJumped: false, flipped: false, flipping: false, flipT: 0, restT: 0 });
-    if (P.ceiling) return; // a touch resets the flip, but nothing holds a car up there
     let f = flat(c.f, n);
     if (len(f) < 0.1) f = cross(flat(c.r, n), n);
     c.f = unit(f);
     c.u = n.slice();
     c.r = cross(c.u, c.f);
     c.ground = true;
-    c.surface = P;
 }
 
-// Drive from one surface onto another, carrying the speed around the corner between them.
-function transfer(c, P) {
-    const from = c.surface;
-    const k = unit(cross(from.n, P.n));
-    const t = Math.acos(clamp(dot(from.n, P.n), -1, 1));
-    c.f = unit(flat(rotate(c.f, k, t), P.n));
-    c.u = P.n.slice();
+// Keep a driving car on the curved surface: tip it, and its velocity with it, from its old up to
+// the normal under it, so its speed carries round a ramp onto a wall and back down.
+function follow(c, n) {
+    c.f = turn(c.f, c.u, n);
+    c.vel = turn(c.vel, c.u, n);
+    c.u = n.slice();
+    c.f = unit(flat(c.f, n));
     c.r = cross(c.u, c.f);
-    c.vel = flat(rotate(c.vel, k, t), P.n);
-    c.pos = axpy(REST - (dot(P.n, c.pos) - P.d), P.n, c.pos);
-    const gap = clearance(c, from);
-    if (gap < 0) c.pos = axpy(-gap, from.n, c.pos);
-    if (P.ceiling) c.ground = false;
-    else c.surface = P;
+    c.vel = flat(c.vel, n);
 }
 
 function touchArena(c) {
-    const planes = planesAt(hitboxCenter(c));
-    if (c.ground && !planes.includes(c.surface)) c.ground = false;
-    let onFloor = false;
-    for (const P of planes) {
-        if (c.ground && P === c.surface) continue;
-        const gap = clearance(c, P);
-        const height = dot(P.n, c.pos) - P.d;
-        if (!c.ground && !P.solid && dot(c.u, P.n) > 0.6 && (height < REST || gap < 0) && dot(c.vel, P.n) <= 0) {
-            land(c, P);
-            continue;
+    const center = hitboxCenter(c);
+    const open = inGoalMouth(center);
+    const under = surfaceAt(c.pos, open);
+    if (c.ground) {
+        if (under.h > REST + 40) c.ground = false; // the wall ended under it, over a goal mouth
+        else {
+            follow(c, under.n);
+            c.pos = axpy(REST - under.h, under.n, c.pos);
+            // Off an overhang once gravity beats the sticky force: half a g, plus up to another
+            // g on steep surfaces while it's driving.
+            const n = under.n;
+            if (-n[2] > 0.5 + (c.throttling || Math.abs(dot(c.vel, c.f)) > 25 ? 1 - Math.abs(n[2]) : 0)) c.ground = false;
         }
-        if (gap >= 0) continue;
-        if (c.ground && !P.solid && Math.abs(dot(c.f, P.n)) > 0.25 && dot(c.vel, P.n) < 0) {
-            transfer(c, P);
-            continue;
-        }
-        // Body contact: push out, then bounce and scuff with RocketSim's car-world restitution
-        // and friction (both 0.3). A car tumbling onto the floor keeps rolling until its wheels
-        // come round.
-        c.pos = axpy(-gap, P.n, c.pos);
-        const vn = dot(c.vel, P.n);
-        if (vn < 0 && c.ground) c.vel = axpy(-vn, P.n, c.vel);
-        else if (vn < 0) {
-            const vt = flat(c.vel, P.n);
-            const st = len(vt);
-            c.vel = axpy(-0.3 * vn, P.n, scale(st > 0 ? Math.max(0, 1 - (0.39 * -vn) / st) : 0, vt));
-        }
-        if (P.n[2] > 0.7) onFloor = true;
     }
-    if (c.ground) c.pos = axpy(REST - (dot(c.surface.n, c.pos) - c.surface.d), c.surface.n, c.pos);
+    // The hitbox corner deepest in the surface (the inside is convex, so the box is clear when
+    // all eight corners are).
+    const box = hitboxCenter(c);
+    let deepest = 0;
+    let n = null;
+    for (const a of [-1, 1])
+        for (const b of [-1, 1])
+            for (const e of [-1, 1]) {
+                const q = axpy(e * HB[2], c.u, axpy(b * HB[1], c.r, axpy(a * HB[0], c.f, box)));
+                const s = surfaceAt(q, open);
+                if (s.h < deepest) (deepest = s.h), (n = s.n);
+            }
+    if (!c.ground && dot(c.u, under.n) > 0.6 && (under.h < REST || n) && dot(c.vel, under.n) <= 0) {
+        land(c, under.n);
+        c.pos = axpy(REST - under.h, under.n, c.pos);
+        n = null;
+    }
+    // Body contact: push out, then bounce and scuff with RocketSim's car-world restitution and
+    // friction (both 0.3). A tumbling car keeps rolling until its wheels come round.
+    const contacts = n ? [[-deepest, n]] : [];
+    // Inside a goal, its walls and crossbar.
+    if (open && Math.abs(center[1]) > 5120)
+        for (const P of GOAL_PLANES[center[1] > 0 ? 0 : 1]) {
+            const gap = clearance(c, P);
+            if (gap < 0) contacts.push([-gap, P.n]);
+        }
+    let onFloor = false;
+    for (const [depth, m] of contacts) {
+        c.pos = axpy(depth, m, c.pos);
+        const vn = dot(c.vel, m);
+        if (vn < 0 && c.ground) c.vel = axpy(-vn, m, c.vel);
+        else if (vn < 0) {
+            const vt = flat(c.vel, m);
+            const st = len(vt);
+            c.vel = axpy(-0.3 * vn, m, scale(st > 0 ? Math.max(0, 1 - (0.39 * -vn) / st) : 0, vt));
+        }
+        if (m[2] > 0.7) onFloor = true;
+    }
     // Lying on its roof or side: it can auto-flip with a jump, and if it sits there anyway it
     // gets put back on its wheels.
     c.onFloor = !c.ground && onFloor;
     c.restT = c.onFloor ? c.restT + DT : 0;
-    if (c.restT > 0.8) land(c, FLOOR);
-}
-
-// Push a body back inside a cut corner and reflect (restitution e) its velocity off it.
-function cornerBounce(p, v, r, e) {
-    const sx = Math.sign(p[0]) || 1;
-    const sy = Math.sign(p[1]) || 1;
-    const depth = r - (CORNER - Math.abs(p[0]) - Math.abs(p[1])) / Math.SQRT2;
-    if (depth <= 0) return;
-    const n = [-sx / Math.SQRT2, -sy / Math.SQRT2];
-    p[0] += n[0] * depth;
-    p[1] += n[1] * depth;
-    const vn = v[0] * n[0] + v[1] * n[1];
-    if (vn < 0) (v[0] -= (1 + e) * vn * n[0]), (v[1] -= (1 + e) * vn * n[1]);
+    if (c.restT > 0.8) {
+        land(c, [0, 0, 1]);
+        c.pos[2] = REST;
+    }
 }
 
 function stepBall(b) {
@@ -549,21 +568,28 @@ function stepBall(b) {
         b.pos[k] += b.vel[k] * DT;
     }
     const p = b.pos;
-    const v = b.vel;
-    if (p[2] < BALL_REST) {
-        p[2] = BALL_REST;
-        if (v[2] < 0) v[2] = v[2] < -60 ? -v[2] * 0.6 : 0;
-        if (v[2] === 0) (v[0] *= 1 - 0.1 * DT), (v[1] *= 1 - 0.1 * DT);
-        // Rolling: spin to match the ground speed, up to the ball's 6 rad/s cap.
-        const w = [-v[1] / BALL_R, v[0] / BALL_R, 0];
+    const inMouth = Math.abs(p[0]) < 892.755 - BALL_R * 0.5 && p[2] < 642.775 - BALL_R * 0.5;
+    const { h, n } = surfaceAt(p, inMouth);
+    const rolling = b.rolling;
+    b.rolling = h < BALL_REST + 1;
+    if (h < BALL_REST) {
+        for (let k = 0; k < 3; k++) p[k] += n[k] * (BALL_REST - h);
+        // Arriving from the air it bounces, at the ball's 0.6 restitution. Once it's on a surface
+        // it rolls, turning with the surface the way a car does, so its speed carries round the
+        // ramps and up the walls.
+        if (rolling) b.vel = turn(b.vel, b.n, n);
+        const v = b.vel;
+        const vn = dot(v, n);
+        const bounce = !rolling && vn < -60;
+        if (vn < 0) for (let k = 0; k < 3; k++) v[k] -= (bounce ? 1.6 : 1) * vn * n[k];
+        if (!bounce) for (let k = 0; k < 3; k++) v[k] *= 1 - 0.1 * DT;
+        b.n = n;
+        // Spin to match the rolling speed, up to the ball's 6 rad/s cap.
+        const w = scale(1 / BALL_R, cross(n, v));
         b.w = scale(Math.min(1, 6 / (len(w) || 1)), w);
     }
-    if (p[2] > 2044 - BALL_R) (p[2] = 2044 - BALL_R), (v[2] = -Math.abs(v[2]) * 0.6);
-    if (Math.abs(p[0]) > 4096 - BALL_R) (p[0] = Math.sign(p[0]) * (4096 - BALL_R)), (v[0] = -v[0] * 0.6);
-    const inMouth = Math.abs(p[0]) < 892.755 - BALL_R * 0.5 && p[2] < 642.775 - BALL_R * 0.5;
-    if (Math.abs(p[1]) > 5120 - BALL_R && !inMouth) (p[1] = Math.sign(p[1]) * (5120 - BALL_R)), (v[1] = -v[1] * 0.6);
+    const v = b.vel;
     if (Math.abs(p[1]) > 6000 - BALL_R) (p[1] = Math.sign(p[1]) * (6000 - BALL_R)), (v[1] = -v[1] * 0.3);
-    cornerBounce(p, v, BALL_R, 0.6);
     const s = len(v);
     if (s > 6000) for (let i = 0; i < 3; i++) v[i] *= 6000 / s;
 }
@@ -584,6 +610,7 @@ function hitBall(g, c, i) {
     const rel = dot(sub(c.vel, g.ball.vel), n);
     if (rel > 0) {
         g.ball.vel = axpy((rel * 6) / 7, n, g.ball.vel);
+        g.ball.rolling = false; // so a ball knocked into the wall bounces off it
         c.vel = axpy(-rel / 7, n, c.vel);
     }
     if (g.t - g.lastHit[i] > 0.1) {
@@ -714,7 +741,7 @@ export function buildObs(g, i, out) {
 }
 
 function predictBall(g) {
-    const b = { pos: g.ball.pos.slice(), vel: g.ball.vel.slice(), w: g.ball.w.slice() };
+    const b = { ...g.ball, pos: g.ball.pos.slice(), vel: g.ball.vel.slice(), w: g.ball.w.slice() };
     let s = 0;
     for (let t = 0; t <= PRED_TICKS[PRED_TICKS.length - 1]; t++) {
         stepBall(b);
@@ -740,7 +767,7 @@ export function newGame() {
 function resetGame(g) {
     const spot = Math.floor(Math.random() * KICKOFFS.length);
     for (const c of g.cars) kickoffCar(c, spot);
-    g.ball = { pos: [0, 0, BALL_REST], vel: [0, 0, 0], w: [0, 0, 0] };
+    g.ball = { pos: [0, 0, BALL_REST], vel: [0, 0, 0], w: [0, 0, 0], rolling: true, n: [0, 0, 1] };
     g.padT.fill(0);
     g.since = 0;
     g.goal = 0;
@@ -951,6 +978,13 @@ export default function babybot() {
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
+        // Where the floor starts curving up into the walls.
+        const [L, W, C] = CORE;
+        ctx.strokeStyle = rgba(p.fg, 0.1);
+        ctx.beginPath();
+        [[C - W, W], [L, C - L], [L, L - C], [C - W, -W], [W - C, -W], [-L, L - C], [-L, C - L], [W - C, W]].forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+        ctx.closePath();
+        ctx.stroke();
         ctx.strokeStyle = rgba(p.fg, 0.14);
         ctx.beginPath();
         ctx.moveTo(F.x, Y(0));
@@ -1101,11 +1135,12 @@ export default function babybot() {
             }
         }
         // The decision, decoded.
-        const tx = cols[1].x;
         const ty = h - Lo.bottom + 6;
         ctx.textBaseline = "top";
         mono(ctx, w > 520 ? 12 : 10, rgba(p.fg, 0.85), 500);
-        ctx.fillText(describe(ACTIONS[chosen]), tx, ty);
+        const label = describe(ACTIONS[chosen]);
+        const tx = Math.max(14, Math.min(cols[1].x, w - 14 - ctx.measureText(label).width)); // kept on a narrow canvas
+        ctx.fillText(label, tx, ty);
         if (w > 520) {
             mono(ctx, 10, rgba(p.fg, 0.45));
             ctx.fillText(`action ${chosen} of 90 · p ${probs[chosen].toFixed(2)}`, tx, ty + 17);
