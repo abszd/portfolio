@@ -819,7 +819,9 @@ button:focus-visible .sweep,
 .row-main {
     width: 100%;
     display: grid;
-    grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1.25fr) auto;
+    /* Fixed outer columns so every row's description starts at the same x,
+       whatever the length of its title or status. */
+    grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1.25fr) 7rem;
     align-items: baseline;
     gap: 24px;
     padding: 22px 0;
