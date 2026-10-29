@@ -2,13 +2,17 @@ import { TAU, clamp, mono, rgba, ramp } from "./util.js";
 
 // BabyBot playing itself, beside its own network. The weights are the trained checkpoint
 // (a shared 193 → 512 → 512 trunk into a 512 × 3 policy head with 90 actions), run here in
-// JavaScript for both cars. The physics is a small stand-in for RocketSim, so the play is
-// approximate, but every input is built the way BetterObs builds it and every decision
+// JavaScript for both cars. The physics is a compact port of RocketSim, so the play is close
+// rather than exact, but every input is built the way BetterObs builds it and every decision
 // is the network's own.
 
 const DT = 1 / 120;
 const TICK_SKIP = 8;
-const BALL_R = 92.75;
+// GigaLearn's default action delay (tick skip − 1): a decision takes over 7 ticks after the
+// observation it was made from.
+const ACTION_DELAY = 7;
+const BALL_R = 91.25;
+const BALL_REST = 93.15;
 const POS = 1 / 5000;
 const VEL = 1 / 2300;
 const ANG = 1 / 3;
@@ -154,152 +158,374 @@ export function forward(net, x) {
 }
 
 // ---------------------------------------------------------------------------
-// A small stand-in for RocketSim
+// A compact port of RocketSim
 // ---------------------------------------------------------------------------
+//
+// The constants and rules are RocketSim's: throttle, braking and steering curves, tyre grip
+// that lets go under powerslide, jumps, double jumps, dodges with flip cancels and z-damping,
+// air control and its damping, bumps and demos. The arena is flat planes without the curved
+// ramps, and cars drive on every floor, wall and corner face of it.
+
+const GRAVITY = 650;
+const MAX_SPEED = 2300;
+const TORQUE_SCALE = ((2 * Math.PI) / 65536) * 1000;
+const AIR_TORQUE = [130, 95, 400].map((v) => v * TORQUE_SCALE); // pitch, yaw, roll
+const AIR_DAMP = [30, 20, 50].map((v) => v * TORQUE_SCALE);
+const FLIP_TORQUE = [260, 224]; // rad/s², about the nose (side flips) and the right axis (front and back flips)
+const WHEELBASE = 84.87; // Octane, front axle to rear
+const REST = 17; // height of a car's origin above whatever it drives on
+const CAP_R = 34; // cars collide with each other as capsules of this radius
+const RESPAWNS = [
+    [-2304, -4608],
+    [-2688, -4608],
+    [2304, -4608],
+    [2688, -4608],
+];
+const IDLE = [0, 0, 0, 0, 0, 0, 0, 0];
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const len = (a) => Math.hypot(a[0], a[1], a[2]);
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const axpy = (k, a, b) => [b[0] + k * a[0], b[1] + k * a[1], b[2] + k * a[2]];
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const scale = (k, a) => [k * a[0], k * a[1], k * a[2]];
+const unit = (a) => scale(1 / (len(a) || 1), a);
+const flat = (v, n) => axpy(-dot(v, n), n, v);
+// Rotate v about the unit axis k by angle t (Rodrigues).
+function rotate(v, k, t) {
+    const c = Math.cos(t);
+    const s = Math.sin(t);
+    const kv = cross(k, v);
+    const d = dot(k, v) * (1 - c);
+    return [v[0] * c + kv[0] * s + k[0] * d, v[1] * c + kv[1] * s + k[1] * d, v[2] * c + kv[2] * s + k[2] * d];
+}
 const interp = (x, xs, ys) => {
     if (x <= xs[0]) return ys[0];
     for (let i = 1; i < xs.length; i++) if (x <= xs[i]) return ys[i - 1] + ((ys[i] - ys[i - 1]) * (x - xs[i - 1])) / (xs[i] - xs[i - 1]);
     return ys[ys.length - 1];
 };
-const curvature = (v) => interp(Math.abs(v), [0, 500, 1000, 1500, 1750, 2300], [0.0069, 0.00398, 0.00235, 0.001375, 0.0011, 0.00088]);
+const steerAngle = (v) => interp(Math.abs(v), [0, 500, 1000, 1500, 1750, 3000], [0.53356, 0.3193, 0.18203, 0.1057, 0.08507, 0.03454]);
+const slideAngle = (v) => interp(Math.abs(v), [0, 2500], [0.39235, 0.1261]);
 const throttleAccel = (v) => (Math.abs(v) < 1400 ? 1600 - Math.abs(v) * (1440 / 1400) : Math.max(0, 16 * (1410 - Math.abs(v))));
+const bumpGround = (v) => interp(v, [0, 1400, 2200], [0, 1100, 1530]);
+const bumpAir = (v) => interp(v, [0, 1400, 2200], [0, 1390, 1945]);
+const bumpUp = (v) => interp(v, [0, 1400, 2200], [0, 278, 417]);
+
+// The arena as planes, each with an inward normal n (inside means n·p ≥ d). Cars drive on all
+// of them; the ceiling drops them. The back walls are open over the goal mouths, and inside
+// a goal its back, sides and crossbar are solid.
+const H = Math.SQRT1_2;
+const FLOOR = { n: [0, 0, 1], d: 0 };
+const PLANES = [
+    FLOOR,
+    { n: [0, 0, -1], d: -2044, ceiling: true },
+    { n: [-1, 0, 0], d: -4096 },
+    { n: [1, 0, 0], d: -4096 },
+    { n: [0, -1, 0], d: -5120, back: true },
+    { n: [0, 1, 0], d: -5120, back: true },
+    { n: [-H, -H, 0], d: -CORNER * H },
+    { n: [H, -H, 0], d: -CORNER * H },
+    { n: [-H, H, 0], d: -CORNER * H },
+    { n: [H, H, 0], d: -CORNER * H },
+];
+const GOAL_PLANES = [1, -1].map((s) => [
+    { n: [0, -s, 0], d: -6000, solid: true },
+    { n: [-1, 0, 0], d: -893, solid: true },
+    { n: [1, 0, 0], d: -893, solid: true },
+    { n: [0, 0, -1], d: -643, solid: true },
+]);
+const inGoalMouth = (p) => Math.abs(p[0]) < 893 && p[2] < 643;
+
+function planesAt(p) {
+    const out = PLANES.filter((P) => !(P.back && inGoalMouth(p)));
+    if (Math.abs(p[1]) > 5120 && inGoalMouth(p)) out.push(...GOAL_PLANES[p[1] > 0 ? 0 : 1]);
+    return out;
+}
+
+const hitboxCenter = (c) => [0, 1, 2].map((k) => c.pos[k] + c.f[k] * HOFF[0] + c.u[k] * HOFF[2]);
+
+// Gap between the car's hitbox and a plane, negative when they overlap.
+function clearance(c, P) {
+    const n = P.n;
+    const reach = Math.abs(dot(c.f, n)) * HB[0] + Math.abs(dot(c.r, n)) * HB[1] + Math.abs(dot(c.u, n)) * HB[2];
+    return dot(n, hitboxCenter(c)) - P.d - reach;
+}
 
 function makeCar(team) {
-    return { team, prev: new Array(8).fill(0) };
+    return { team, prev: IDLE };
+}
+
+function placeCar(c, x, y, yaw) {
+    Object.assign(c, {
+        pos: [x, y, REST],
+        vel: [0, 0, 0],
+        f: [Math.cos(yaw), Math.sin(yaw), 0],
+        r: [-Math.sin(yaw), Math.cos(yaw), 0],
+        u: [0, 0, 1],
+        w: [0, 0, 0], // world angular velocity
+        boost: 33.3,
+        ground: true,
+        surface: FLOOR,
+        jumped: false,
+        jumping: false,
+        jumpT: 0,
+        sinceJump: 0,
+        doubleJumped: false,
+        flipped: false,
+        flipping: false,
+        flipT: 0,
+        flipTorque: [0, 0],
+        slide: 0, // powerslide amount, ramps up and down like RocketSim's handbrake
+        prevJump: 0,
+        boosting: false,
+        supersonic: false,
+        bumpT: 0,
+        demoed: 0,
+        onFloor: false,
+        restT: 0,
+        autoFlip: 0,
+        autoFlipDir: 1,
+    });
 }
 
 function kickoffCar(c, spot) {
     let [x, y, yaw] = KICKOFFS[spot];
     if (c.team === 1) (x = -x), (y = -y), (yaw += Math.PI);
-    Object.assign(c, {
-        pos: [x, y, 17],
-        vel: [0, 0, 0],
-        f: [Math.cos(yaw), Math.sin(yaw), 0],
-        r: [-Math.sin(yaw), Math.cos(yaw), 0],
-        u: [0, 0, 1],
-        w: [0, 0, 0], // local rates: roll, pitch, yaw
-        boost: 33.3,
-        ground: true,
-        jumped: false,
-        jumpT: 0,
-        airT: 0,
-        flipped: false,
-        flipT: 0,
-        flipDir: [0, 0],
-        prevJump: 0,
-        boosting: false,
-        prev: new Array(8).fill(0),
-    });
+    placeCar(c, x, y, yaw);
+    c.prev = IDLE;
 }
 
-const hasFlip = (c) => c.ground || (!c.flipped && (!c.jumped || c.airT < 1.25));
+function respawn(c) {
+    const [x, y] = RESPAWNS[Math.floor(Math.random() * RESPAWNS.length)];
+    const s = c.team === 0 ? 1 : -1;
+    placeCar(c, x * s, y * s, (s * Math.PI) / 2);
+}
+
+const hasFlip = (c) => c.ground || (!c.flipped && !c.doubleJumped && c.sinceJump < 1.25);
 
 function stepCar(c, a) {
-    const [th, st, pi, ya, ro, ju, bo, hb] = a;
-    c.boosting = bo > 0 && c.boost > 0;
+    if (c.demoed > 0) {
+        c.demoed -= DT;
+        if (c.demoed <= 0) respawn(c);
+        return;
+    }
+    c.boosting = a[6] > 0 && c.boost > 0;
     if (c.boosting) c.boost = Math.max(0, c.boost - 33.3 * DT);
-    if (c.ground) {
-        let fs = dot(c.vel, c.f);
-        const t = c.boosting ? 1 : th;
-        let acc;
-        if (t * fs < -1) acc = -Math.sign(fs) * 3500;
-        else if (t) acc = t * throttleAccel(fs);
-        else acc = -Math.sign(fs) * Math.min(525, Math.abs(fs) / DT);
-        if (c.boosting) acc += 991.67;
-        fs = clamp(fs + acc * DT, -2300, 2300);
-        const yawRate = st * curvature(fs) * (hb ? 1.6 : 1) * fs;
-        c.w = [0, 0, yawRate];
-        const ang = yawRate * DT;
-        const co = Math.cos(ang);
-        const si = Math.sin(ang);
-        const f = [c.f[0] * co + c.r[0] * si, c.f[1] * co + c.r[1] * si, 0];
-        c.r = [c.r[0] * co - c.f[0] * si, c.r[1] * co - c.f[1] * si, 0];
-        c.f = f;
-        const k = fs * (hb ? 0.995 : 1);
-        c.vel = [f[0] * k, f[1] * k, 0];
-        if (ju && !c.prevJump) {
-            c.ground = false;
-            c.jumped = true;
-            c.jumpT = 0;
-            c.airT = 0;
-            c.vel = axpy(291.67, c.u, c.vel);
-        }
-    } else {
-        c.airT += DT;
-        if (c.jumped && c.jumpT < 0.2 && ju && !c.flipped) c.vel = axpy(1458.33 * DT, c.u, c.vel);
-        c.jumpT += DT;
-        if (ju && !c.prevJump && hasFlip(c) && c.airT > 0.05) {
-            if (Math.abs(pi) + Math.abs(ya) + Math.abs(ro) >= 0.5) {
-                const fl = Math.hypot(c.f[0], c.f[1]) || 1;
-                const fx = c.f[0] / fl;
-                const fy = c.f[1] / fl;
-                c.vel = [c.vel[0] + (fx * -pi - fy * (ya + ro)) * 500, c.vel[1] + (fy * -pi + fx * (ya + ro)) * 500, c.vel[2] * 0.35];
-                c.flipped = true;
-                c.flipT = 0.65;
-                c.flipDir = [-pi, ya + ro];
-            } else {
-                c.vel = axpy(291.67, c.u, c.vel);
-                c.flipped = true;
-            }
-        }
-        if (c.flipT > 0) {
-            c.flipT -= DT;
-            c.w = [5.5 * clamp(c.flipDir[1], -1, 1), -5.5 * c.flipDir[0], 0];
-        } else {
-            c.w = [
-                clamp(c.w[0] + (ro * 38.34 - 4.47 * c.w[0]) * DT, -5.5, 5.5),
-                clamp(c.w[1] + (pi * 12.46 - 2.798 * c.w[1] * (1 - Math.abs(pi))) * DT, -5.5, 5.5),
-                clamp(c.w[2] + (ya * 9.11 - 1.886 * c.w[2] * (1 - Math.abs(ya))) * DT, -5.5, 5.5),
-            ];
-        }
-        // Rotate the local frame: yaw turns f toward r, pitch turns f toward u, roll turns u toward r.
-        const [wr, wp, wy] = c.w.map((v) => v * DT);
-        let { f, r, u } = c;
-        [f, r] = [axpy(wy, r, f), axpy(-wy, f, r)];
-        [f, u] = [axpy(wp, u, f), axpy(-wp, f, u)];
-        [u, r] = [axpy(wr, r, u), axpy(-wr, u, r)];
-        const fl = len(f);
-        f = f.map((v) => v / fl);
-        u = axpy(-dot(u, f), f, u);
-        const ul = len(u);
-        u = u.map((v) => v / ul);
-        c.f = f;
-        c.u = u;
-        c.r = cross(u, f);
-        if (c.boosting) c.vel = axpy(1058 * DT, c.f, c.vel);
-        c.vel[2] -= 650 * DT;
-    }
+    if (c.ground) drive(c, a);
+    else fly(c, a);
+    c.prevJump = a[5];
     const sp = len(c.vel);
-    if (sp > 2300) c.vel = c.vel.map((v) => (v * 2300) / sp);
+    if (sp > MAX_SPEED) c.vel = scale(MAX_SPEED / sp, c.vel);
+    c.supersonic = sp >= 2200 || (c.supersonic && sp >= 2100);
     c.pos = axpy(DT, c.vel, c.pos);
-    for (const [i, lim] of [
-        [0, 4036],
-        [1, 5060],
-    ]) {
-        if (Math.abs(c.pos[i]) > lim) {
-            c.pos[i] = Math.sign(c.pos[i]) * lim;
-            if (c.vel[i] * Math.sign(c.pos[i]) > 0) c.vel[i] = 0;
+    touchArena(c);
+    c.bumpT = Math.max(0, c.bumpT - DT);
+}
+
+// On a surface: throttle, brake and coast along the nose, steering from RocketSim's steer-angle
+// curves, and its friction curves for grip: sideways motion bleeds off each tick, far slower
+// under powerslide, and a car coasting on a wall barely grips, so it slides down.
+function drive(c, a) {
+    const [th, st, , , , ju, , hb] = a;
+    const n = c.u;
+    c.slide = clamp(c.slide + (hb ? 5 : -2) * DT, 0, 1);
+    const fs0 = dot(c.vel, c.f);
+    let ang = steerAngle(fs0);
+    ang += (slideAngle(fs0) - ang) * c.slide;
+    const yawRate = (st * fs0 * Math.tan(ang)) / WHEELBASE;
+    c.f = rotate(c.f, n, yawRate * DT);
+    c.r = cross(n, c.f);
+    c.w = scale(yawRate, n);
+    // Gravity along the surface: nothing on the floor, a pull downhill on a wall.
+    const v = flat(axpy(-GRAVITY * DT, [0, 0, 1], c.vel), n);
+    let fs = dot(v, c.f);
+    let ls = dot(v, c.r);
+    const t = c.boosting ? 1 : th;
+    const slip = Math.abs(ls) > 5 ? Math.abs(ls) / (Math.abs(ls) + Math.abs(fs)) : 0;
+    let lat = 1 - 0.8 * slip;
+    let lon = 1;
+    if (c.slide) {
+        lat *= 1 - 0.9 * c.slide;
+        lon = 1 - (0.5 - 0.4 * slip) * c.slide;
+    }
+    if (!t) {
+        const k = interp(n[2], [0, 0.7075, 1], [0.1, 0.5, 1]);
+        lat *= k;
+        lon *= k;
+    }
+    let acc;
+    if (hb) acc = t * throttleAccel(fs); // no braking while the handbrake is held
+    else if (t * fs < -1) acc = -Math.sign(fs) * 3500;
+    else if (t) acc = t * throttleAccel(fs);
+    else acc = -Math.sign(fs) * Math.min(525, Math.abs(fs) / DT);
+    fs += acc * lon * DT;
+    if (c.boosting) fs += (2975 / 3) * DT;
+    ls *= 1 - 0.16 * lat;
+    c.vel = axpy(ls, c.r, scale(fs, c.f));
+    if (ju && !c.prevJump) {
+        Object.assign(c, { ground: false, jumped: true, jumping: true, jumpT: 0 });
+        c.vel = axpy(875 / 3 + 0.62 * (4375 / 3) * DT, n, c.vel);
+    }
+}
+
+// In the air: the rest of the jump, a double jump or a dodge on a fresh press, then the
+// dodge's torque (cancelled by pulling against it) or air control.
+function fly(c, a) {
+    const [th, , pi, ya, ro, ju] = a;
+    if (c.jumping) {
+        c.jumpT += DT;
+        if (c.jumpT >= 0.2 || (!ju && c.jumpT >= 0.025)) c.jumping = false;
+        else c.vel = axpy((c.jumpT < 0.025 ? 0.62 : 1) * (4375 / 3) * DT, c.u, c.vel);
+    }
+    if (c.jumped && !c.jumping) c.sinceJump += DT;
+    const roll = Math.atan2(-c.r[2], c.u[2]);
+    if (ju && !c.prevJump && c.onFloor && Math.abs(roll) > 2.8) {
+        // RocketSim's auto-flip off the roof.
+        c.autoFlip = (0.4 * Math.abs(roll)) / Math.PI;
+        c.autoFlipDir = roll > 0 ? 1 : -1;
+        c.vel = axpy(-200, c.u, c.vel);
+    }
+    if (c.autoFlip > 0) {
+        c.autoFlip -= DT;
+        c.w = axpy(50 * c.autoFlipDir * DT, c.f, c.w);
+    } else if (ju && !c.prevJump && hasFlip(c)) {
+        if (Math.abs(pi) + Math.abs(ya) + Math.abs(ro) >= 0.5) dodge(c, -pi, ya + ro);
+        else (c.vel = axpy(875 / 3, c.u, c.vel)), (c.doubleJumped = true);
+    }
+    if (c.flipped) c.flipT += DT;
+    c.flipping = c.flipping && c.flipT < 0.65;
+    if (c.flipping && c.flipT >= 0.15 && (c.vel[2] < 0 || c.flipT < 0.21)) c.vel[2] *= 0.65;
+
+    let air = !(c.autoFlip > 0);
+    if (c.flipping) {
+        let [tf, tr] = c.flipTorque;
+        if (tf || tr) {
+            air = false;
+            if (tr && pi && Math.sign(tr) === Math.sign(pi)) {
+                tr *= 1 - Math.min(Math.abs(pi), 1);
+                air = true;
+            }
+            c.w = axpy(tf * FLIP_TORQUE[0] * DT, c.f, axpy(tr * FLIP_TORQUE[1] * DT, c.r, c.w));
         }
     }
-    cornerBounce(c.pos, c.vel, 60, 0);
-    if (c.pos[2] > 2024) (c.pos[2] = 2024), (c.vel[2] = Math.min(0, c.vel[2]));
-    if (!c.ground && c.pos[2] <= 17 && c.vel[2] <= 0) {
-        const yaw = Math.atan2(c.f[1], c.f[0]);
-        if (c.u[2] < 0.5) c.vel = c.vel.map((v) => v * 0.4);
-        c.f = [Math.cos(yaw), Math.sin(yaw), 0];
-        c.r = [-Math.sin(yaw), Math.cos(yaw), 0];
-        c.u = [0, 0, 1];
-        c.vel[2] = 0;
-        Object.assign(c, { ground: true, jumped: false, flipped: false, flipT: 0 });
+    if (air) {
+        // Pitch input does nothing for a moment after a dodge.
+        const p = c.flipped && c.flipT < 0.95 ? 0 : pi;
+        const pitchAxis = scale(-1, c.r);
+        const rollAxis = scale(-1, c.f);
+        const torque = axpy(p * AIR_TORQUE[0], pitchAxis, axpy(ya * AIR_TORQUE[1], c.u, scale(ro * AIR_TORQUE[2], rollAxis)));
+        const damp = axpy(
+            dot(pitchAxis, c.w) * AIR_DAMP[0] * (1 - Math.abs(p)),
+            pitchAxis,
+            axpy(dot(c.u, c.w) * AIR_DAMP[1] * (1 - Math.abs(ya)), c.u, scale(dot(rollAxis, c.w) * AIR_DAMP[2], rollAxis)),
+        );
+        c.w = axpy(DT, sub(torque, damp), c.w);
     }
-    if (c.ground) c.pos[2] = 17;
-    c.prevJump = ju;
+    const spin = len(c.w);
+    if (spin > 5.5) c.w = scale(5.5 / spin, c.w);
+    if (spin > 1e-6) {
+        const k = unit(c.w);
+        const t = Math.min(spin, 5.5) * DT;
+        const f = unit(rotate(c.f, k, t));
+        c.u = unit(flat(rotate(c.u, k, t), f));
+        c.f = f;
+        c.r = cross(c.u, c.f);
+    }
+    if (th) c.vel = axpy((200 / 3) * th * DT, c.f, c.vel);
+    if (c.boosting) c.vel = axpy((3175 / 3) * DT, c.f, c.vel);
+    c.vel[2] -= GRAVITY * DT;
+}
+
+// RocketSim's dodge: a sideways or forward impulse that grows with speed, and a torque that
+// keeps turning the car for 0.65 s unless the stick pulls against it.
+function dodge(c, dx, dy) {
+    Object.assign(c, { flipped: true, flipping: true, flipT: 0 });
+    let dir = [dx, dy];
+    if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) dir = [0, 0];
+    else dir = dir.map((v) => v / Math.hypot(dx, dy));
+    c.flipTorque = [-dir[1], dir[0]];
+    const ix = Math.abs(dir[0]) < 0.1 ? 0 : dir[0];
+    const iy = Math.abs(dir[1]) < 0.1 ? 0 : dir[1];
+    if (!ix && !iy) return;
+    const fwd = dot(c.vel, c.f);
+    const ratio = Math.abs(fwd) / MAX_SPEED;
+    const backwards = Math.abs(fwd) < 100 ? ix < 0 : ix >= 0 !== fwd >= 0;
+    let vx = ix * 500 * ((backwards ? 1.5 : 0) * ratio + 1);
+    const vy = iy * 500 * (0.9 * ratio + 1);
+    if (backwards) vx *= 16 / 15;
+    const fh = unit([c.f[0], c.f[1], 0]);
+    const rh = [-fh[1], fh[0], 0];
+    c.vel = axpy(vy, rh, axpy(vx, fh, c.vel));
+}
+
+// Wheels onto a surface: drop the speed into it and square the car up to it.
+function land(c, P) {
+    const n = P.n;
+    const vn = dot(c.vel, n);
+    if (vn < 0) c.vel = axpy(-vn, n, c.vel);
+    Object.assign(c, { jumped: false, jumping: false, sinceJump: 0, doubleJumped: false, flipped: false, flipping: false, flipT: 0, restT: 0 });
+    if (P.ceiling) return; // a touch resets the flip, but nothing holds a car up there
+    let f = flat(c.f, n);
+    if (len(f) < 0.1) f = cross(flat(c.r, n), n);
+    c.f = unit(f);
+    c.u = n.slice();
+    c.r = cross(c.u, c.f);
+    c.ground = true;
+    c.surface = P;
+}
+
+// Drive from one surface onto another, carrying the speed around the corner between them.
+function transfer(c, P) {
+    const from = c.surface;
+    const k = unit(cross(from.n, P.n));
+    const t = Math.acos(clamp(dot(from.n, P.n), -1, 1));
+    c.f = unit(flat(rotate(c.f, k, t), P.n));
+    c.u = P.n.slice();
+    c.r = cross(c.u, c.f);
+    c.vel = flat(rotate(c.vel, k, t), P.n);
+    c.pos = axpy(REST - (dot(P.n, c.pos) - P.d), P.n, c.pos);
+    const gap = clearance(c, from);
+    if (gap < 0) c.pos = axpy(-gap, from.n, c.pos);
+    if (P.ceiling) c.ground = false;
+    else c.surface = P;
+}
+
+function touchArena(c) {
+    const planes = planesAt(hitboxCenter(c));
+    if (c.ground && !planes.includes(c.surface)) c.ground = false;
+    let onFloor = false;
+    for (const P of planes) {
+        if (c.ground && P === c.surface) continue;
+        const gap = clearance(c, P);
+        const height = dot(P.n, c.pos) - P.d;
+        if (!c.ground && !P.solid && dot(c.u, P.n) > 0.6 && (height < REST || gap < 0) && dot(c.vel, P.n) <= 0) {
+            land(c, P);
+            continue;
+        }
+        if (gap >= 0) continue;
+        if (c.ground && !P.solid && Math.abs(dot(c.f, P.n)) > 0.25 && dot(c.vel, P.n) < 0) {
+            transfer(c, P);
+            continue;
+        }
+        // Body contact: push out, then bounce and scuff with RocketSim's car-world restitution
+        // and friction (both 0.3). A car tumbling onto the floor keeps rolling until its wheels
+        // come round.
+        c.pos = axpy(-gap, P.n, c.pos);
+        const vn = dot(c.vel, P.n);
+        if (vn < 0 && c.ground) c.vel = axpy(-vn, P.n, c.vel);
+        else if (vn < 0) {
+            const vt = flat(c.vel, P.n);
+            const st = len(vt);
+            c.vel = axpy(-0.3 * vn, P.n, scale(st > 0 ? Math.max(0, 1 - (0.39 * -vn) / st) : 0, vt));
+        }
+        if (P.n[2] > 0.7) onFloor = true;
+    }
+    if (c.ground) c.pos = axpy(REST - (dot(c.surface.n, c.pos) - c.surface.d), c.surface.n, c.pos);
+    // Lying on its roof or side: it can auto-flip with a jump, and if it sits there anyway it
+    // gets put back on its wheels.
+    c.onFloor = !c.ground && onFloor;
+    c.restT = c.onFloor ? c.restT + DT : 0;
+    if (c.restT > 0.8) land(c, FLOOR);
 }
 
 // Push a body back inside a cut corner and reflect (restitution e) its velocity off it.
@@ -316,20 +542,21 @@ function cornerBounce(p, v, r, e) {
 }
 
 function stepBall(b) {
-    b.vel[2] -= 650 * DT;
-    const drag = 1 - 0.0305 * DT;
-    b.vel[0] *= drag;
-    b.vel[1] *= drag;
-    b.vel[2] *= drag;
-    b.pos[0] += b.vel[0] * DT;
-    b.pos[1] += b.vel[1] * DT;
-    b.pos[2] += b.vel[2] * DT;
+    b.vel[2] -= GRAVITY * DT;
+    const drag = 1 - 0.03 * DT;
+    for (let k = 0; k < 3; k++) {
+        b.vel[k] *= drag;
+        b.pos[k] += b.vel[k] * DT;
+    }
     const p = b.pos;
     const v = b.vel;
-    if (p[2] < BALL_R) {
-        p[2] = BALL_R;
+    if (p[2] < BALL_REST) {
+        p[2] = BALL_REST;
         if (v[2] < 0) v[2] = v[2] < -60 ? -v[2] * 0.6 : 0;
         if (v[2] === 0) (v[0] *= 1 - 0.1 * DT), (v[1] *= 1 - 0.1 * DT);
+        // Rolling: spin to match the ground speed, up to the ball's 6 rad/s cap.
+        const w = [-v[1] / BALL_R, v[0] / BALL_R, 0];
+        b.w = scale(Math.min(1, 6 / (len(w) || 1)), w);
     }
     if (p[2] > 2044 - BALL_R) (p[2] = 2044 - BALL_R), (v[2] = -Math.abs(v[2]) * 0.6);
     if (Math.abs(p[0]) > 4096 - BALL_R) (p[0] = Math.sign(p[0]) * (4096 - BALL_R)), (v[0] = -v[0] * 0.6);
@@ -342,8 +569,9 @@ function stepBall(b) {
 }
 
 // Sphere vs. the car's oriented hitbox, plus Psyonix's extra "hit" impulse.
-function collide(g, c, i) {
-    const center = [0, 1, 2].map((k) => c.pos[k] + c.f[k] * HOFF[0] + c.u[k] * HOFF[2]);
+function hitBall(g, c, i) {
+    if (c.demoed > 0) return false;
+    const center = hitboxCenter(c);
     const d0 = sub(g.ball.pos, center);
     const q = [clamp(dot(d0, c.f), -HB[0], HB[0]), clamp(dot(d0, c.r), -HB[1], HB[1]), clamp(dot(d0, c.u), -HB[2], HB[2])];
     const closest = [0, 1, 2].map((k) => center[k] + c.f[k] * q[0] + c.r[k] * q[1] + c.u[k] * q[2]);
@@ -352,8 +580,12 @@ function collide(g, c, i) {
     if (dist >= BALL_R || dist < 1e-6) return false;
     const n = d.map((v) => v / dist);
     g.ball.pos = axpy(BALL_R, n, closest);
+    // The ball weighs a sixth of the car.
     const rel = dot(sub(c.vel, g.ball.vel), n);
-    if (rel > 0) g.ball.vel = axpy(rel, n, g.ball.vel);
+    if (rel > 0) {
+        g.ball.vel = axpy((rel * 6) / 7, n, g.ball.vel);
+        c.vel = axpy(-rel / 7, n, c.vel);
+    }
     if (g.t - g.lastHit[i] > 0.1) {
         const s = Math.min(len(sub(c.vel, g.ball.vel)), 4600);
         let dir = sub(g.ball.pos, c.pos);
@@ -367,27 +599,82 @@ function collide(g, c, i) {
     return true;
 }
 
+// Closest points between segments p1–q1 and p2–q2 (Ericson, Real-Time Collision Detection 5.1.9).
+function closestPoints(p1, q1, p2, q2) {
+    const d1 = sub(q1, p1);
+    const d2 = sub(q2, p2);
+    const r = sub(p1, p2);
+    const a = dot(d1, d1);
+    const e = dot(d2, d2);
+    const f = dot(d2, r);
+    const c = dot(d1, r);
+    const b = dot(d1, d2);
+    const den = a * e - b * b;
+    let s = den > 1e-9 ? clamp((b * f - c * e) / den, 0, 1) : 0;
+    let t = (b * s + f) / e;
+    if (t < 0) (t = 0), (s = clamp(-c / a, 0, 1));
+    else if (t > 1) (t = 1), (s = clamp((b - c) / a, 0, 1));
+    return [axpy(s, d1, p1), axpy(t, d2, p2)];
+}
+
+function capsule(c) {
+    const m = hitboxCenter(c);
+    const h = HB[0] - CAP_R;
+    return [axpy(-h, c.f, m), axpy(h, c.f, m)];
+}
+
+// Car on car: push apart and trade momentum, then RocketSim's bump for whoever led with the
+// nose, or a demo if they were supersonic.
+function bumpCars(g) {
+    const [A, B] = g.cars;
+    if (A.demoed > 0 || B.demoed > 0) return;
+    const [pa, pb] = closestPoints(...capsule(A), ...capsule(B));
+    const d = sub(pb, pa);
+    const dist = len(d);
+    if (dist >= 2 * CAP_R || dist < 1e-6) return;
+    const n = scale(1 / dist, d);
+    const push = (2 * CAP_R - dist) / 2;
+    A.pos = axpy(-push, n, A.pos);
+    B.pos = axpy(push, n, B.pos);
+    const closing = dot(sub(A.vel, B.vel), n);
+    if (closing <= 0) return;
+    A.vel = axpy(-closing * 0.55, n, A.vel);
+    B.vel = axpy(closing * 0.55, n, B.vel);
+    for (const [X, Y, m] of [
+        [A, B, n],
+        [B, A, scale(-1, n)],
+    ]) {
+        if (X.bumpT > 0 || dot(X.f, m) < 0.7) continue;
+        const toward = dot(X.vel, m) + closing * 0.55;
+        if (toward <= 0) continue;
+        X.bumpT = 0.25;
+        if (X.supersonic) {
+            Y.demoed = 3;
+            Y.vel = [0, 0, 0];
+            Y.w = [0, 0, 0];
+            g.demos++;
+            return;
+        }
+        const up = Y.ground ? Y.u : [0, 0, 1];
+        Y.vel = axpy((Y.ground ? bumpGround : bumpAir)(toward), unit(X.vel), axpy(bumpUp(toward), up, Y.vel));
+        Y.ground = false;
+    }
+}
+
 // Orange sees the field rotated 180° about z, as RLGym's InvertPhys does.
 const inv = (v) => [-v[0], -v[1], v[2]];
 const local = (c, v) => [dot(c.f, v), dot(c.r, v), dot(c.u, v)];
 
 // BetterObs, in order: AdvancedObs (ball, last action, pads, self, opponent),
 // then seven ball-path samples relative to both cars.
-function buildObs(g, i, out) {
+export function buildObs(g, i, out) {
     const flip = i === 1;
-    const view = (c) => {
-        const v = flip
-            ? { pos: inv(c.pos), vel: inv(c.vel), f: inv(c.f), r: inv(c.r), u: inv(c.u) }
-            : { pos: c.pos, vel: c.vel, f: c.f, r: c.r, u: c.u };
-        const wl = c.w;
-        v.wWorld = [-wl[0] * v.f[0] + wl[1] * v.r[0] + wl[2] * v.u[0], -wl[0] * v.f[1] + wl[1] * v.r[1] + wl[2] * v.u[1], -wl[0] * v.f[2] + wl[1] * v.r[2] + wl[2] * v.u[2]];
-        return v;
-    };
+    const view = (c) => (flip ? { pos: inv(c.pos), vel: inv(c.vel), f: inv(c.f), r: inv(c.r), u: inv(c.u), w: inv(c.w) } : c);
     const me = view(g.cars[i]);
     const op = view(g.cars[1 - i]);
     const bp = flip ? inv(g.ball.pos) : g.ball.pos;
     const bv = flip ? inv(g.ball.vel) : g.ball.vel;
-    const bw = bp[2] < 100 ? [bv[1] / BALL_R, -bv[0] / BALL_R, 0] : [0, 0, 0];
+    const bw = flip ? inv(g.ball.w) : g.ball.w;
     let k = 0;
     const push = (arr, s = 1) => {
         for (const v of arr) out[k++] = v * s;
@@ -408,11 +695,11 @@ function buildObs(g, i, out) {
         push(c.f);
         push(c.u);
         push(c.vel, VEL);
-        push(c.wWorld, ANG);
-        push(local(c, c.wWorld), ANG);
+        push(c.w, ANG);
+        push(local(c, c.w), ANG);
         push(local(c, sub(bp, c.pos)), POS);
         push(local(c, sub(bv, c.vel)), VEL);
-        push([raw.boost / 100, raw.ground ? 1 : 0, hasFlip(raw) ? 1 : 0, 0, raw.jumped ? 1 : 0]);
+        push([raw.boost / 100, raw.ground ? 1 : 0, hasFlip(raw) ? 1 : 0, raw.demoed > 0 ? 1 : 0, raw.jumped ? 1 : 0]);
     }
     for (let s = 0; s < PRED_TICKS.length; s++) {
         let pp = g.pred[s].slice(0, 3);
@@ -427,7 +714,7 @@ function buildObs(g, i, out) {
 }
 
 function predictBall(g) {
-    const b = { pos: g.ball.pos.slice(), vel: g.ball.vel.slice() };
+    const b = { pos: g.ball.pos.slice(), vel: g.ball.vel.slice(), w: g.ball.w.slice() };
     let s = 0;
     for (let t = 0; t <= PRED_TICKS[PRED_TICKS.length - 1]; t++) {
         stepBall(b);
@@ -435,20 +722,16 @@ function predictBall(g) {
     }
 }
 
-function newGame() {
+export function newGame() {
     const g = {
         cars: [makeCar(0), makeCar(1)],
-        ball: null,
         padT: new Float32Array(34),
         pred: [],
         score: [0, 0],
         touches: 0,
+        demos: 0,
         t: 0,
         lastHit: [-1, -1],
-        since: 0,
-        goal: 0,
-        ticks: 0,
-        actions: [ACTIONS[0], ACTIONS[0]],
     };
     resetGame(g);
     return g;
@@ -457,16 +740,105 @@ function newGame() {
 function resetGame(g) {
     const spot = Math.floor(Math.random() * KICKOFFS.length);
     for (const c of g.cars) kickoffCar(c, spot);
-    g.ball = { pos: [0, 0, BALL_R], vel: [0, 0, 0] };
+    g.ball = { pos: [0, 0, BALL_REST], vel: [0, 0, 0], w: [0, 0, 0] };
     g.padT.fill(0);
     g.since = 0;
     g.goal = 0;
+    g.ticks = 0;
     g.trail = [];
+    g.actions = [IDLE, IDLE];
+    g.next = [IDLE, IDLE];
+}
+
+// One 120 Hz tick. Every TICK_SKIP ticks `decide` writes new actions into g.next, and they take
+// over ACTION_DELAY ticks later, as in training.
+export function tickGame(g, decide) {
+    if (g.goal) {
+        g.goal += DT;
+        if (g.goal > 1.2) resetGame(g);
+        return;
+    }
+    if (g.ticks % TICK_SKIP === 0) {
+        predictBall(g);
+        decide(g);
+    }
+    if (g.ticks % TICK_SKIP === ACTION_DELAY) g.actions = g.next.slice();
+    g.ticks++;
+    g.t += DT;
+    g.cars.forEach((c, i) => stepCar(c, g.actions[i]));
+    stepBall(g.ball);
+    // Alternate who meets the ball first, so a shared touch favours neither side.
+    const order = g.ticks % 2 ? [0, 1] : [1, 0];
+    const hits = order.map((i) => hitBall(g, g.cars[i], i));
+    if (hits[0] || hits[1]) g.since = 0;
+    bumpCars(g);
+    for (const c of g.cars) {
+        if (c.demoed > 0 || c.pos[2] > 200 || c.boost >= 100) continue;
+        PADS.forEach(([x, y, big], k) => {
+            if (g.padT[k] > 0 || Math.hypot(x - c.pos[0], y - c.pos[1]) > (big ? 208 : 144)) return;
+            c.boost = Math.min(100, c.boost + (big ? 100 : 12));
+            g.padT[k] = big ? 10 : 4;
+        });
+    }
+    for (let k = 0; k < 34; k++) g.padT[k] = Math.max(0, g.padT[k] - DT);
+    g.since += DT;
+    if (g.ticks % 4 === 0) {
+        g.trail.push(g.ball.pos.slice(0, 2));
+        if (g.trail.length > 40) g.trail.shift();
+    }
+    if (Math.abs(g.ball.pos[1]) > 5120 + BALL_R) {
+        g.score[g.ball.pos[1] > 0 ? 0 : 1]++;
+        g.goal = DT;
+        g.scorer = g.ball.pos[1] > 0 ? 0 : 1;
+    } else if (g.since > 15) resetGame(g);
 }
 
 // ---------------------------------------------------------------------------
 // Figure
 // ---------------------------------------------------------------------------
+
+function fillPoly(ctx, pts, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.fill();
+}
+
+// Convex hull of 2D points (monotone chain).
+function hull(pts) {
+    pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const turn = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const half = (list) => {
+        const out = [];
+        for (const q of list) {
+            while (out.length >= 2 && turn(out[out.length - 2], out[out.length - 1], q) <= 0) out.pop();
+            out.push(q);
+        }
+        return out.slice(0, -1);
+    };
+    return [...half(pts), ...half(pts.slice().reverse())];
+}
+
+// The car's hitbox seen from above: about twice life size so it reads at this scale, a little
+// bigger the higher it is, and foreshortened on a wall or mid-flip.
+function drawCar(ctx, c, col, X, Y, s, p) {
+    const k = Math.max(2.2, 7 / (118 * s)) * (1 + c.pos[2] / 1500);
+    const m = hitboxCenter(c);
+    const at = (a, b, h) => {
+        const q = axpy(h * HB[2] * k, c.u, axpy(b * HB[1] * k, c.r, axpy(a * HB[0] * k, c.f, m)));
+        return [X(q[0]), Y(q[1])];
+    };
+    if (c.boosting) {
+        const tail = 1 + Math.random() * 0.8;
+        fillPoly(ctx, [at(-1, -0.5, 0), at(-1 - tail, 0, 0), at(-1, 0.5, 0)], rgba(p.c, 0.8));
+    }
+    const corners = [];
+    for (const a of [-1, 1]) for (const b of [-1, 1]) for (const h of [-1, 1]) corners.push(at(a, b, h));
+    fillPoly(ctx, hull(corners), rgba(col, 0.95));
+    // Windshield, on the roof toward the nose.
+    if (c.u[2] > -0.05) fillPoly(ctx, [at(0.1, -0.64, 1), at(0.46, -0.64, 1), at(0.46, 0.64, 1), at(0.1, 0.64, 1)], rgba(p.bg, 0.7));
+}
 
 export default function babybot() {
     let net = null;
@@ -496,14 +868,13 @@ export default function babybot() {
 
     // Blue's decision is the one drawn, so it runs last and its activations stay in the layers.
     function decide() {
-        predictBall(g);
         const t0 = performance.now();
         for (const i of [1, 0]) {
             const logits = forward(net, buildObs(g, i, obs));
             let best = 0;
             for (let a = 1; a < 90; a++) if (logits[a] > logits[best]) best = a;
-            g.actions[i] = ACTIONS[best];
-            g.cars[i].prev = ACTIONS[best].slice();
+            g.next[i] = ACTIONS[best];
+            g.cars[i].prev = ACTIONS[best];
             if (i === 0) {
                 chosen = best;
                 let sum = 0;
@@ -531,42 +902,6 @@ export default function babybot() {
             }
             inp = out;
         });
-    }
-
-    function tick() {
-        if (g.goal) {
-            g.goal += DT;
-            if (g.goal > 1.2) resetGame(g);
-            return;
-        }
-        if (g.ticks % TICK_SKIP === 0) decide();
-        g.ticks++;
-        stepCar(g.cars[0], g.actions[0]);
-        stepCar(g.cars[1], g.actions[1]);
-        stepBall(g.ball);
-        g.t += DT;
-        const blueHit = collide(g, g.cars[0], 0);
-        const orangeHit = collide(g, g.cars[1], 1);
-        if (blueHit || orangeHit) g.since = 0;
-        for (const c of g.cars) {
-            if (c.pos[2] > 200) continue;
-            PADS.forEach(([x, y, big], k) => {
-                if (g.padT[k] > 0 || Math.hypot(x - c.pos[0], y - c.pos[1]) > (big ? 208 : 144)) return;
-                c.boost = Math.min(100, c.boost + (big ? 100 : 12));
-                g.padT[k] = big ? 10 : 4;
-            });
-        }
-        for (let k = 0; k < 34; k++) g.padT[k] = Math.max(0, g.padT[k] - DT);
-        g.since += DT;
-        if (g.ticks % 4 === 0) {
-            g.trail.push(g.ball.pos.slice(0, 2));
-            if (g.trail.length > 40) g.trail.shift();
-        }
-        if (Math.abs(g.ball.pos[1]) > 5120 + BALL_R) {
-            g.score[g.ball.pos[1] > 0 ? 0 : 1]++;
-            g.goal = DT;
-            g.scorer = g.ball.pos[1] > 0 ? 0 : 1;
-        } else if (g.since > 15) resetGame(g);
     }
 
     function layout(w, h) {
@@ -645,30 +980,15 @@ export default function babybot() {
 
         g.cars.forEach((c, i) => {
             const col = i === 0 ? p.b : p.d;
-            const fx = -c.f[0];
-            const fy = -c.f[1];
-            ctx.save();
-            ctx.translate(X(c.pos[0]), Y(c.pos[1]));
-            ctx.transform(fx, fy, -fy, fx, 0, 0);
-            const lift = 1 + c.pos[2] / 1500;
-            // Drawn about twice life size so the cars read at this scale.
-            const L = Math.max(7, 118 * s * 2.2) * lift;
-            const Wd = Math.max(5, 84 * s * 2.2) * lift;
-            if (c.boosting) {
-                ctx.fillStyle = rgba(p.c, 0.8);
-                ctx.beginPath();
-                ctx.moveTo(-L / 2, -Wd * 0.25);
-                ctx.lineTo(-L / 2 - L * (0.5 + Math.random() * 0.4), 0);
-                ctx.lineTo(-L / 2, Wd * 0.25);
-                ctx.fill();
+            if (c.demoed > 0) {
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                mono(ctx, 12, rgba(col, 0.4 + 0.2 * Math.min(1, c.demoed)), 600);
+                ctx.fillText("×", X(c.pos[0]), Y(c.pos[1]));
+                ctx.textAlign = "left";
+                return;
             }
-            ctx.fillStyle = rgba(col, 0.95);
-            ctx.beginPath();
-            ctx.roundRect(-L / 2, -Wd / 2, L, Wd, Math.min(L, Wd) * 0.25);
-            ctx.fill();
-            ctx.fillStyle = rgba(p.bg, 0.7);
-            ctx.fillRect(L * 0.05, -Wd * 0.32, L * 0.18, Wd * 0.64);
-            ctx.restore();
+            drawCar(ctx, c, col, X, Y, s, p);
             if (i === 0) {
                 // The car whose network is drawn on the right.
                 ctx.strokeStyle = rgba(p.b, 0.5);
@@ -799,7 +1119,7 @@ export default function babybot() {
             acc += Math.min(dt, 0.05);
             while (acc >= DT) {
                 acc -= DT;
-                tick();
+                tickGame(g, decide);
             }
             frameDt = dt || frameDt;
         },

@@ -111,7 +111,7 @@ export const projects = [
         stack: ["C++", "PPO", "GigaLearn", "RLGymCPP", "RocketSim", "LibTorch", "CUDA"],
         figure: "babybot",
         figureCaption:
-            "The trained network playing itself. Every input is built the way BetterObs builds it, and every action is the policy's own pick, shown lighting up layer by layer for the blue car. The physics is a simplified stand-in for RocketSim, so the play is approximate.",
+            "The trained network playing itself. Every input is built the way BetterObs builds it, and every action is the policy's own pick, shown lighting up layer by layer for the blue car. The physics is a port of RocketSim's car and ball rules to an arena of flat walls without the curved ramps, so the play is close to the real thing but not exact.",
         metrics: [
             ["vs Nexto", "50–0 to 50–3"],
             ["series", "~20 × first to 50"],
