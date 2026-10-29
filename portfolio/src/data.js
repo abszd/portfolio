@@ -13,18 +13,18 @@ export const profile = {
     facts: [
         ["now", "Software Engineer @ Skyward"],
         ["studied", "B.S. Computer Science, UW–Madison '25"],
-        ["into", "engines · storage · graphics"],
+        ["into", "engines · storage · graphics · RL"],
         ["status", "open to interesting problems"],
     ],
     skills: [
         ["languages", "C · C++ · C# · Python · SQL · JavaScript · TypeScript · Java · Swift · x86 · R"],
-        ["frameworks", "React · Node.js · .NET · Three.js · OpenGL · OpenCV · PyTorch · Flask · GraphQL"],
+        ["frameworks", "React · Node.js · .NET · Three.js · OpenGL · OpenCV · PyTorch · LibTorch · Flask · GraphQL"],
         ["platforms", "Git · Docker · Linux · Firebase · MongoDB · GCP · AWS · Snowflake"],
         ["certs", "Snowflake: Data Warehousing · Collaboration & Marketplace"],
     ],
     bio: [
         "I like owning a problem end to end. Most of what I build starts with a question like “how does this actually work?”, and ends with me writing the part everyone else imports: the mesher, the buffer pool, the index.",
-        "I studied computer science at UW–Madison, and now I write C# and SQL at Skyward, building the pipelines that move school districts' data between systems without losing a row. Outside of that I'm usually deep in a side project: lately that's a disk-backed vector database in C++ and a fast-paced shooter in Three.js. Before all of that, I founded and ran an e-commerce brand to 30,000+ orders.",
+        "I studied computer science at UW–Madison, and now I write C# and SQL at Skyward, building the pipelines that move school districts' data between systems without losing a row. Outside of that I'm usually deep in a side project: lately that's a Rocket League bot trained with reinforcement learning, a disk-backed vector database in C++, and a fast-paced shooter in Three.js. Before all of that, I founded and ran an e-commerce brand to 30,000+ orders.",
     ],
 };
 
@@ -102,6 +102,48 @@ export const experience = [
 ];
 
 export const projects = [
+    {
+        id: "babybot",
+        title: "BabyBot",
+        year: "2026",
+        status: "solo",
+        tagline: "A Rocket League bot trained from scratch with PPO. Against Nexto it wins first-to-50 1v1 series by 50–0 to 50–3.",
+        stack: ["C++", "PPO", "GigaLearn", "RLGymCPP", "RocketSim", "LibTorch", "CUDA"],
+        figure: "aerial",
+        figureCaption:
+            "The aerial reward's bookkeeping: car and ball travel piles up while the car is airborne and last to touch, the next touch cashes it in, and landing wipes it. The car here is scripted, not the trained policy.",
+        metrics: [
+            ["vs Nexto", "50–0 to 50–3"],
+            ["series", "~20 × first to 50"],
+            ["self-play", "256 games · 15 Hz"],
+        ],
+        links: [],
+        body: `
+## Why
+
+Rocket League is a hard reinforcement-learning problem. The car moves in full 3D physics, drives up walls and flies, and the one thing that really matters, a goal, is rare next to the thousands of small decisions in between. Nexto is the bot most people in the RLGym community measure themselves against, so beating it was the target.
+
+## How it's built
+
+**1. Simulation, not the game.** Training runs on RocketSim, a headless re-implementation of Rocket League's physics, through RLGymCPP and GigaLearn, a C++ PPO learner built on LibTorch. 256 1v1 games step in parallel, and the bot plays against itself in all of them. It acts every 8 physics ticks, which is 15 decisions a second at the game's 120 Hz, with the 7-tick action delay other RLGym setups use. An episode ends on a goal, or after 10 seconds without anyone touching the ball. Along the way I also improved some of GigaLearn's parallelization code.
+
+**2. The network.** A shared 512×512 trunk feeds a 512×512×512 policy head and a larger 768×512×512 critic, with ReLU, LayerNorm and Adam throughout, trained on CUDA. Each PPO iteration collects 100k steps and makes two passes over them in 25k minibatches. The discount is γ = 0.999, which at 15 decisions a second looks about a minute ahead (1 / (1 − γ) = 1,000 steps ≈ 67 s). That is long enough to connect a touch to the goal it sets up.
+
+**3. What the bot sees.** I wrote my own observation builder, BetterObs, which also feeds in RocketSim's ball prediction, so the policy sees where the ball is going and not just where it is.
+
+**4. Where episodes start.** Starting states are mixed: 25% kickoffs, 45% randomized field states, 25% aerial-shot setups and 5% air-dribble setups. The last two put the bot in exactly the situations the aerial rewards are trying to teach, far more often than it would find them by itself.
+
+**5. A curriculum written in rewards.** Training ran in stages. It started with dense shaping just to get the bot touching the ball: facing it, closing speed, touches. Then came basic mechanics: speed, wavedashes, a penalty for floundering on its roof, and an energy term that adds up speed, height, boost and an unused flip as one physical quantity. After that came aerials and game sense: shots, kickoffs, boost pickups and steals, bumps and demos. Most of these are wrapped zero-sum, so whatever the bot earns, its opponent loses, and the two copies can't farm a reward together.
+
+**6. Teaching aerials.** A plain reward for touching the ball in the air teaches the bot to jump and hope. Instead, an \`AerialStateReward\` base class tracks, for each car, how far the car and ball have travelled since that car's last touch, for as long as it stays above ramp height (256 uu). That distance is wiped the moment the car comes down. Only a touch with distance in the bank pays out, and paying out spends it. Four rewards share that gate: distance travelled, progress up the field, pressure (is the ball closer to the opponent's goal than the nearest defender?) and ball speed toward goal. Long, controlled aerials and air dribbles pay; random jumps don't. Alongside them are rewards for flip resets, and for bumping or demoing a defender while a shot is on target, paid only if the goal goes in.
+
+**7. Then let it ride.** Shaping gets a bot to competence, but every shaped term is also something it can exploit. In the last stage I turned everything off except the goal reward: +1 for scoring and −0.75 for conceding, at a weight of 25,000. Conceding costs a little less than scoring earns, which keeps it attacking. From there it plays itself and gets better at the only thing that counts.
+
+## Results
+
+In 1v1 against Nexto I ran about 20 first-to-50 series. BabyBot won every one, with final scores between 50–0 and 50–3.
+`,
+    },
     {
         id: "aridb",
         title: "AriDB",
