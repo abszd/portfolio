@@ -1,3 +1,4 @@
+import aerial from "./aerial.js";
 import captions from "./captions.js";
 import clock from "./clock.js";
 import collide from "./collide.js";
@@ -8,4 +9,4 @@ import robot from "./robot.js";
 import watershed from "./watershed.js";
 
 // Each figure is a factory returning { step(dt, w, h), draw(ctx, w, h, palette) }.
-export const figures = { captions, clock, collide, grades, greedy, hnsw, robot, watershed };
+export const figures = { aerial, captions, clock, collide, grades, greedy, hnsw, robot, watershed };
