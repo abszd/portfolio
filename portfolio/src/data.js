@@ -192,8 +192,8 @@ The in-memory index (insert, search, bidirectional pruning) runs and has tests. 
         status: "playable",
         tagline: "A voxel engine in the browser with multithreaded chunk generation, greedy meshing, and custom GLSL.",
         stack: ["JavaScript", "Three.js", "GLSL", "Web Workers", "Vite"],
-        figure: "greedy",
-        figureCaption: "Greedy meshing: per-face masks are swept and merged into the largest possible quads before they reach the GPU.",
+        figure: "chunks",
+        figureCaption: "The chunk pipeline: chunks in view are queued first, generated and meshed on two worker pools, and uploaded in idle time; anything outside the frustum is loaded but not drawn. Below, face culling on one slice, with the water displaced in the vertex shader.",
         metrics: [
             ["1% lows", "10× better"],
             ["GPU memory", "−90%"],
@@ -236,8 +236,8 @@ Moving chunk work onto worker pools improved 1% low frame rates by about 10×, a
         status: "in progress",
         tagline: "A movement-first browser FPS with jetpacks, slides, and a procedurally built combat map.",
         stack: ["JavaScript", "Three.js", "Vite", "Rapier"],
-        figure: "collide",
-        figureCaption: "Sphere-swept collision: the player casts ahead along its velocity and slides along whatever it hits.",
+        figure: "duel",
+        figureCaption: "Two bots duel with a small state machine (search, engage, take cover, reload), BFS pathing on a nav grid and a view cone that cover blocks. They move with the same momentum and sphere-swept sliding as the player.",
         metrics: [
             ["started", "Jan 2026"],
             ["gravity", "custom"],

@@ -5,7 +5,7 @@ Personal site for Arian Abbaszadeh. Built with React 19 and Vite, with no UI fra
 ## What's in here
 
 - **Generative background** (`src/components/Background.jsx`): a WebGL2 fragment shader that draws a halftone dot field. The dots come from domain-warped simplex fBm, contour lines are traced through the same field, the cursor acts as a lens, and clicks send out ripples. It renders in two passes: the noise is evaluated once per dot cell into a small texture, then the screen pass samples it. If WebGL2 isn't available, it falls back to the gradient blobs from the original site.
-- **Per-project figures** (`src/figures/`): small canvas simulations that show how each project works, including greedy meshing, an HNSW layer search, a watershed segmentation, clock buffer replacement and more. They pause when off-screen and render a single still frame for `prefers-reduced-motion`.
+- **Per-project figures** (`src/figures/`): small canvas simulations that show how each project works, including a voxel chunk pipeline, an HNSW layer search, a watershed segmentation, clock buffer replacement and more. They pause when off-screen and render a single still frame for `prefers-reduced-motion`.
 - **Content** (`src/data.js`): all copy lives here, and project write-ups are Markdown strings. To edit the site, edit this file.
 
 ## Scripts
