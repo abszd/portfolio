@@ -31,9 +31,10 @@ const KICKOFFS = [
     [256, -3840, Math.PI / 2],
     [0, -4608, Math.PI / 2],
 ];
-// Octane hitbox half-extents and offset from the car's origin, in car space.
-const HB = [59, 42.1, 18.1];
-const HOFF = [13.88, 0, 20.75];
+// RocketSim's Octane hitbox (120.507 × 86.6994 × 38.6591) as half-extents, and its offset from
+// the car's origin, in car space.
+const HB = [60.2535, 43.3497, 19.3296];
+const HOFF = [13.8757, 0, 20.755];
 // The arena's corners are cut at 45°: |x| + |y| stays under this.
 const CORNER = 8064;
 const FIELD_OUTLINE = [
@@ -853,8 +854,9 @@ export function tickGame(g, decide) {
     g.t += DT;
     g.cars.forEach((c, i) => stepCar(c, g.actions[i]));
     stepBall(g.ball);
-    // Alternate who meets the ball first, so a shared touch favours neither side.
-    const order = g.ticks % 2 ? [0, 1] : [1, 0];
+    // A coin flip for who meets the ball first, so a shared touch favours neither side. (Going by
+    // the tick's parity instead handed every replay of a kickoff to the same car.)
+    const order = Math.random() < 0.5 ? [0, 1] : [1, 0];
     const hits = order.map((i) => hitBall(g, g.cars[i], i));
     if (hits[0] || hits[1]) g.since = 0;
     bumpCars(g);
