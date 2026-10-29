@@ -109,9 +109,9 @@ export const projects = [
         status: "solo",
         tagline: "A Rocket League bot trained from scratch with PPO. Against Nexto it wins first-to-50 1v1 series by 50–0 to 50–3.",
         stack: ["C++", "PPO", "GigaLearn", "RLGymCPP", "RocketSim", "LibTorch", "CUDA"],
-        figure: "aerial",
+        figure: "babybot",
         figureCaption:
-            "The aerial reward's bookkeeping: car and ball travel piles up while the car is airborne and last to touch, the next touch cashes it in, and landing wipes it. The car here is scripted, not the trained policy.",
+            "The trained network playing itself. Every input is built the way BetterObs builds it, and every action is the policy's own pick, shown lighting up layer by layer for the blue car. The physics is a simplified stand-in for RocketSim, so the play is approximate.",
         metrics: [
             ["vs Nexto", "50–0 to 50–3"],
             ["series", "~20 × first to 50"],

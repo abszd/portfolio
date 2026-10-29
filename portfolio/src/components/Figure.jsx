@@ -4,7 +4,7 @@ import { figures } from "../figures/index.js";
 function palette() {
     const css = getComputedStyle(document.documentElement);
     const v = (name) => css.getPropertyValue(name).trim();
-    return { bg: v("--bg"), fg: v("--fg"), a: v("--accent-a"), b: v("--accent-b"), c: v("--accent-c") };
+    return { bg: v("--bg"), fg: v("--fg"), a: v("--accent-a"), b: v("--accent-b"), c: v("--accent-c"), d: v("--accent-d") };
 }
 
 // Hosts one generative figure on a canvas: handles DPR sizing, theme colours,
@@ -68,6 +68,14 @@ export default function Figure({ kind, reducedMotion, className = "", label }) {
         });
         ro.observe(canvas);
 
+        // Figures that load data first (BabyBot's weights) expose a `ready` promise.
+        let disposed = false;
+        fig.ready?.then(() => {
+            if (disposed || !w || !h) return;
+            draw();
+            start();
+        });
+
         const io = new IntersectionObserver(([entry]) => {
             visible = entry.isIntersecting;
             if (visible) start();
@@ -82,6 +90,7 @@ export default function Figure({ kind, reducedMotion, className = "", label }) {
         window.addEventListener("themechange", onTheme);
 
         return () => {
+            disposed = true;
             cancelAnimationFrame(raf);
             ro.disconnect();
             io.disconnect();
