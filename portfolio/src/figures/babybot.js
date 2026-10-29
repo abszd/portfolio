@@ -570,20 +570,21 @@ function stepBall(b) {
     const p = b.pos;
     const inMouth = Math.abs(p[0]) < 892.755 - BALL_R * 0.5 && p[2] < 642.775 - BALL_R * 0.5;
     const { h, n } = surfaceAt(p, inMouth);
-    const rolling = b.rolling;
+    const rolling = b.rolling; // on a surface last tick, whose normal was last
+    const last = b.n;
     b.rolling = h < BALL_REST + 1;
+    b.n = n;
     if (h < BALL_REST) {
         for (let k = 0; k < 3; k++) p[k] += n[k] * (BALL_REST - h);
-        // Arriving from the air it bounces, at the ball's 0.6 restitution. Once it's on a surface
-        // it rolls, turning with the surface the way a car does, so its speed carries round the
-        // ramps and up the walls.
-        if (rolling) b.vel = turn(b.vel, b.n, n);
+        // A ball already on a surface turns with it, the way a car does, so its speed carries
+        // round the ramps and up the walls. Whatever still drives it into the surface bounces,
+        // at the ball's 0.6 restitution, or settles if it's slow.
+        if (rolling) b.vel = turn(b.vel, last, n);
         const v = b.vel;
         const vn = dot(v, n);
-        const bounce = !rolling && vn < -60;
+        const bounce = vn < -60;
         if (vn < 0) for (let k = 0; k < 3; k++) v[k] -= (bounce ? 1.6 : 1) * vn * n[k];
         if (!bounce) for (let k = 0; k < 3; k++) v[k] *= 1 - 0.1 * DT;
-        b.n = n;
         // Spin to match the rolling speed, up to the ball's 6 rad/s cap.
         const w = scale(1 / BALL_R, cross(n, v));
         b.w = scale(Math.min(1, 6 / (len(w) || 1)), w);
@@ -610,7 +611,6 @@ function hitBall(g, c, i) {
     const rel = dot(sub(c.vel, g.ball.vel), n);
     if (rel > 0) {
         g.ball.vel = axpy((rel * 6) / 7, n, g.ball.vel);
-        g.ball.rolling = false; // so a ball knocked into the wall bounces off it
         c.vel = axpy(-rel / 7, n, c.vel);
     }
     if (g.t - g.lastHit[i] > 0.1) {
@@ -764,10 +764,69 @@ export function newGame() {
     return g;
 }
 
-function resetGame(g) {
+const rand = (a, b) => a + Math.random() * (b - a);
+const randomDir = () => unit([rand(-1, 1), rand(-1, 1), rand(-1, 1)]);
+
+function setBall(g, pos, vel, w) {
+    g.ball = { pos, vel, w, rolling: pos[2] < BALL_REST + 1, n: [0, 0, 1] };
+}
+
+// A car on its wheels at (x, y), facing yaw, moving at vel.
+function groundCar(c, x, y, yaw, vel, boost) {
+    placeCar(c, x, y, yaw);
+    Object.assign(c, { vel: [vel[0], vel[1], 0], boost, prev: IDLE });
+}
+
+function kickoffState(g) {
     const spot = Math.floor(Math.random() * KICKOFFS.length);
     for (const c of g.cars) kickoffCar(c, spot);
-    g.ball = { pos: [0, 0, BALL_REST], vel: [0, 0, 0], w: [0, 0, 0], rolling: true, n: [0, 0, 1] };
+    setBall(g, [0, 0, BALL_REST], [0, 0, 0], [0, 0, 0]);
+}
+
+// RLGymCPP's RandomState: ball and cars anywhere, at any speed and spin. Cars are on their wheels,
+// or with allOnGround false each one has even odds of starting in midair at any angle.
+function randomState(g, allOnGround) {
+    setBall(g, [rand(-3500, 3500), rand(-4000, 4000), rand(BALL_REST, 1820)], scale(rand(0, 4000), randomDir()), [rand(-4, 4), rand(-4, 4), rand(-4, 4)]);
+    for (const c of g.cars) {
+        const yaw = rand(-Math.PI, Math.PI);
+        const vel = scale(rand(0, MAX_SPEED), randomDir());
+        groundCar(c, rand(-3500, 3500), rand(-4000, 4000), yaw, vel, rand(0, 100));
+        if (allOnGround || Math.random() > 0.5) continue;
+        const pitch = rand(-Math.PI / 2, Math.PI / 2);
+        c.f = [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch)];
+        c.r = rotate([-Math.sin(yaw), Math.cos(yaw), 0], c.f, rand(-Math.PI, Math.PI));
+        c.u = cross(c.f, c.r);
+        c.vel = vel;
+        c.pos[2] = rand(150, 1820);
+        c.w = scale(5.5, randomDir());
+        c.ground = false;
+    }
+}
+
+// An aerial shot: the ball hanging in the air, one car on the ground behind it with boost to go
+// up for it, and the other back in its own half.
+function aerialState(g) {
+    const s = Math.random() < 0.5 ? 1 : -1; // the shooter attacks +y for blue, -y for orange
+    const [shooter, keeper] = s > 0 ? g.cars : [g.cars[1], g.cars[0]];
+    const ball = [rand(-2500, 2500), s * rand(-500, 3000), rand(400, 1300)];
+    setBall(g, ball, [rand(-400, 400), rand(-400, 400), rand(0, 600)], [rand(-2, 2), rand(-2, 2), rand(-2, 2)]);
+    const x = clamp(ball[0] + rand(-800, 800), -3500, 3500);
+    const y = clamp(ball[1] - s * rand(1000, 2200), -4500, 4500);
+    const yaw = Math.atan2(ball[1] - y, ball[0] - x);
+    groundCar(shooter, x, y, yaw, scale(rand(500, 1500), [Math.cos(yaw), Math.sin(yaw), 0]), rand(60, 100));
+    const kx = rand(-3000, 3000);
+    const ky = s * rand(2000, 4500);
+    groundCar(keeper, kx, ky, Math.atan2(ball[1] - ky, ball[0] - kx), scale(rand(0, 1000), randomDir()), rand(0, 100));
+}
+
+// Rounds start the way BabyBot's training episodes did: a kickoff a quarter of the time, otherwise
+// a random state (all cars on the ground for 10%, some in midair for 50%) or an aerial shot (15%).
+function resetGame(g) {
+    const pick = Math.random();
+    if (pick < 0.25) kickoffState(g);
+    else if (pick < 0.35) randomState(g, true);
+    else if (pick < 0.85) randomState(g, false);
+    else aerialState(g);
     g.padT.fill(0);
     g.since = 0;
     g.goal = 0;
@@ -817,7 +876,7 @@ export function tickGame(g, decide) {
         g.score[g.ball.pos[1] > 0 ? 0 : 1]++;
         g.goal = DT;
         g.scorer = g.ball.pos[1] > 0 ? 0 : 1;
-    } else if (g.since > 15) resetGame(g);
+    } else if (g.since > 10) resetGame(g); // training's NoTouchCondition(10)
 }
 
 // ---------------------------------------------------------------------------
